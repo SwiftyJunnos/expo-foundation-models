@@ -1,19 +1,28 @@
-import type { StyleProp, ViewStyle } from 'react-native';
+/**
+ * Input/output types for CoreML predictions.
+ */
+export type MLValue = number | number[] | string;
+export type MLDictionary = { [key: string]: MLValue };
 
-export type OnLoadEventPayload = {
-  url: string;
+/**
+ * Generation options for Foundation Models.
+ */
+export type GenerationOptions = {
+  temperature?: number;
+  maxTokens?: number;
 };
 
+/**
+ * Token event emitted during streaming generation.
+ */
+export type TokenEvent = {
+  token: string;
+  sessionId: string;
+};
+
+/**
+ * Events emitted by the ExpoFoundationModels module.
+ */
 export type ExpoFoundationModelsModuleEvents = {
-  onChange: (params: ChangeEventPayload) => void;
-};
-
-export type ChangeEventPayload = {
-  value: string;
-};
-
-export type ExpoFoundationModelsViewProps = {
-  url: string;
-  onLoad: (event: { nativeEvent: OnLoadEventPayload }) => void;
-  style?: StyleProp<ViewStyle>;
+  onToken: (event: TokenEvent) => void;
 };

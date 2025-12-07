@@ -19,7 +19,13 @@
     "react-native",
     "expo",
     "expo-foundation-models",
-    "ExpoFoundationModels"
+    "ExpoFoundationModels",
+    "coreml",
+    "apple-intelligence",
+    "foundation-models",
+    "machine-learning",
+    "on-device-llm",
+    "ios"
   ],
   "repository": "https://github.com/SwiftyJunnos/expo-foundation-models",
   "bugs": {

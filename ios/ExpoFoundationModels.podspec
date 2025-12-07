@@ -11,8 +11,8 @@ Pod::Spec.new do |s|
   s.author         = package['author']
   s.homepage       = package['homepage']
   s.platforms      = {
-    :ios => '15.1',
-    :tvos => '15.1'
+    :ios => '16.0',
+    :tvos => '16.0'
   }
   s.swift_version  = '5.9'
   s.source         = { git: 'https://github.com/SwiftyJunnos/expo-foundation-models' }
@@ -24,6 +24,9 @@ Pod::Spec.new do |s|
   s.pod_target_xcconfig = {
     'DEFINES_MODULE' => 'YES',
   }
+
+  # Weak link FoundationModels framework for iOS 26+
+  s.weak_frameworks = ['FoundationModels']
 
   s.source_files = "**/*.{h,m,mm,swift,hpp,cpp}"
 end
