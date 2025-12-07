@@ -32,6 +32,12 @@ jest.mock('./src/ExpoFoundationModelsModule', () => ({
     respondWithChoices: jest.fn(),
     streamWithSchema: jest.fn(),
 
+    // Tool Calling functions
+    createSessionWithTools: jest.fn(),
+    respondWithTools: jest.fn(),
+    submitToolResult: jest.fn(),
+    streamWithTools: jest.fn(),
+
     // Event listener
     addListener: jest.fn(() => ({
       remove: jest.fn(),

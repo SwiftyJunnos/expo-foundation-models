@@ -14,7 +14,7 @@ class ExpoFoundationModelsModule : Module() {
     override fun definition() = ModuleDefinition {
         Name("ExpoFoundationModels")
 
-        Events("onToken", "onPartialSchema")
+        Events("onToken", "onPartialSchema", "onToolCall")
 
         // CoreML Functions (iOS only)
 
@@ -79,6 +79,24 @@ class ExpoFoundationModelsModule : Module() {
         }
 
         AsyncFunction("streamWithSchema") { sessionId: String, prompt: String, schema: Map<String, Any>, options: Map<String, Any>?, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        // Tool Calling Functions (iOS only)
+
+        AsyncFunction("createSessionWithTools") { options: Map<String, Any>, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("respondWithTools") { sessionId: String, prompt: String, options: Map<String, Any>?, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("submitToolResult") { sessionId: String, toolResult: Map<String, Any>, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("streamWithTools") { sessionId: String, prompt: String, options: Map<String, Any>?, promise: Promise ->
             promise.reject(PlatformNotSupportedException())
         }
     }

@@ -14,6 +14,13 @@ import type {
   JSONSchema,
   JSONSchemaType,
   PartialSchemaEvent,
+  Tool,
+  ToolCall,
+  ToolResult,
+  ToolResponse,
+  SessionOptions,
+  StreamWithToolsCallbacks,
+  ToolCallEvent,
 } from './ExpoFoundationModels.types';
 
 export type {
@@ -30,6 +37,13 @@ export type {
   JSONSchema,
   JSONSchemaType,
   PartialSchemaEvent,
+  Tool,
+  ToolCall,
+  ToolResult,
+  ToolResponse,
+  SessionOptions,
+  StreamWithToolsCallbacks,
+  ToolCallEvent,
 };
 
 /**
@@ -647,6 +661,215 @@ export const FoundationModels = {
       throw parseNativeError(error, 'Schema streaming failed', 'SCHEMA_STREAMING_FAILED');
     } finally {
       subscription.remove();
+    }
+  },
+
+  // MARK: - Tool Calling
+
+  /**
+   * Create a session with tools that the model can call.
+   *
+   * @param options - Session options including tools and instructions
+   * @returns Promise resolving to a session ID
+   * @throws {FoundationModelsError} If session creation fails
+   *
+   * @example
+   * ```typescript
+   * const sessionId = await FoundationModels.createSessionWithTools({
+   *   instructions: 'You are a helpful assistant',
+   *   tools: [{
+   *     name: 'getWeather',
+   *     description: 'Get weather for a city',
+   *     parameters: {
+   *       type: 'object',
+   *       properties: { city: { type: 'string' } },
+   *       required: ['city']
+   *     }
+   *   }]
+   * });
+   * ```
+   */
+  async createSessionWithTools(options: SessionOptions): Promise<string> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!options.tools || options.tools.length === 0) {
+      throw new FoundationModelsError('At least one tool must be provided', {
+        type: 'generationFailed',
+      });
+    }
+
+    try {
+      return await ExpoFoundationModelsModule.createSessionWithTools(options);
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to create session with tools', 'SESSION_FAILED');
+    }
+  },
+
+  /**
+   * Send a prompt to a tool-enabled session.
+   *
+   * The response may be either text or a tool call request.
+   *
+   * @param sessionId - The session ID
+   * @param prompt - The user prompt
+   * @param options - Optional generation options
+   * @returns Promise resolving to either text content or a tool call
+   * @throws {FoundationModelsError} If generation fails
+   *
+   * @example
+   * ```typescript
+   * const response = await FoundationModels.respondWithTools(sessionId, "What's the weather in Tokyo?");
+   * if (response.type === 'toolCall') {
+   *   // Execute the tool and submit result
+   *   const result = await myTools[response.toolCall.name](response.toolCall.arguments);
+   *   await FoundationModels.submitToolResult(sessionId, {
+   *     callId: response.toolCall.id,
+   *     result
+   *   });
+   * } else {
+   *   console.log(response.content);
+   * }
+   * ```
+   */
+  async respondWithTools(
+    sessionId: string,
+    prompt: string,
+    options?: GenerationOptions
+  ): Promise<ToolResponse> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!sessionId || typeof sessionId !== 'string') {
+      throw new FoundationModelsError('Session ID must be a non-empty string', {
+        type: 'sessionNotFound',
+      });
+    }
+
+    if (!prompt || typeof prompt !== 'string') {
+      throw new FoundationModelsError('Prompt must be a non-empty string', {
+        type: 'generationFailed',
+      });
+    }
+
+    try {
+      return await ExpoFoundationModelsModule.respondWithTools(sessionId, prompt, options ?? null);
+    } catch (error) {
+      throw parseNativeError(error, 'Tool response failed', 'TOOL_RESPONSE_FAILED');
+    }
+  },
+
+  /**
+   * Submit the result of a tool execution back to the model.
+   *
+   * @param sessionId - The session ID
+   * @param toolResult - The tool execution result
+   * @returns Promise resolving to the model's response (text or another tool call)
+   * @throws {FoundationModelsError} If submission fails
+   *
+   * @example
+   * ```typescript
+   * const response = await FoundationModels.submitToolResult(sessionId, {
+   *   callId: 'call-123',
+   *   result: { temperature: 25, condition: 'sunny' }
+   * });
+   * ```
+   */
+  async submitToolResult(sessionId: string, toolResult: ToolResult): Promise<ToolResponse> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!sessionId || typeof sessionId !== 'string') {
+      throw new FoundationModelsError('Session ID must be a non-empty string', {
+        type: 'sessionNotFound',
+      });
+    }
+
+    if (!toolResult.callId || typeof toolResult.callId !== 'string') {
+      throw new FoundationModelsError('Tool call ID must be a non-empty string', {
+        type: 'generationFailed',
+      });
+    }
+
+    try {
+      return await ExpoFoundationModelsModule.submitToolResult(sessionId, toolResult);
+    } catch (error) {
+      throw parseNativeError(error, 'Tool result submission failed', 'TOOL_RESULT_FAILED');
+    }
+  },
+
+  /**
+   * Stream a response from a tool-enabled session.
+   *
+   * @param sessionId - The session ID
+   * @param prompt - The user prompt
+   * @param callbacks - Callbacks for tokens and tool calls
+   * @param options - Optional generation options
+   * @returns Promise resolving to the final response
+   * @throws {FoundationModelsError} If streaming fails
+   */
+  async streamWithTools(
+    sessionId: string,
+    prompt: string,
+    callbacks: StreamWithToolsCallbacks,
+    options?: GenerationOptions
+  ): Promise<ToolResponse> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!sessionId || typeof sessionId !== 'string') {
+      throw new FoundationModelsError('Session ID must be a non-empty string', {
+        type: 'sessionNotFound',
+      });
+    }
+
+    if (!prompt || typeof prompt !== 'string') {
+      throw new FoundationModelsError('Prompt must be a non-empty string', {
+        type: 'streamingFailed',
+      });
+    }
+
+    const tokenSubscription = ExpoFoundationModelsModule.addListener(
+      'onToken',
+      (event: TokenEvent) => {
+        if (event.sessionId === sessionId) {
+          callbacks.onToken(event.token);
+        }
+      }
+    );
+
+    const toolCallSubscription = ExpoFoundationModelsModule.addListener(
+      'onToolCall',
+      (event: ToolCallEvent) => {
+        if (event.sessionId === sessionId) {
+          callbacks.onToolCall(event.toolCall);
+        }
+      }
+    );
+
+    try {
+      return await ExpoFoundationModelsModule.streamWithTools(sessionId, prompt, options ?? null);
+    } catch (error) {
+      throw parseNativeError(error, 'Tool streaming failed', 'TOOL_STREAMING_FAILED');
+    } finally {
+      tokenSubscription.remove();
+      toolCallSubscription.remove();
     }
   },
 };

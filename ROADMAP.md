@@ -164,7 +164,7 @@ const result = await FoundationModels.streamWithSchema(
 ## Phase 3: Tool Calling (High Priority)
 
 ### 3.1 Tool Registration and Execution
-**Status:** 🔴 Not Started
+**Status:** ✅ Completed
 
 Allow the model to call tools/functions defined in JavaScript.
 

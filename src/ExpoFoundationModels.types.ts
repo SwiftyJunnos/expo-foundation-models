@@ -195,10 +195,105 @@ export type PartialSchemaEvent = {
   partial: Record<string, unknown>;
 };
 
+// MARK: - Tool Calling Types
+
+/**
+ * Definition of a tool that can be called by the model.
+ *
+ * @example
+ * ```typescript
+ * const weatherTool: Tool = {
+ *   name: 'getWeather',
+ *   description: 'Get current weather for a city',
+ *   parameters: {
+ *     type: 'object',
+ *     properties: {
+ *       city: { type: 'string', description: 'City name' },
+ *       unit: { type: 'string', enum: ['celsius', 'fahrenheit'] }
+ *     },
+ *     required: ['city']
+ *   }
+ * };
+ * ```
+ */
+export type Tool = {
+  /** Unique name for the tool */
+  name: string;
+  /** Description of what the tool does (helps the model decide when to use it) */
+  description: string;
+  /** JSON Schema defining the tool's parameters */
+  parameters?: JSONSchema;
+};
+
+/**
+ * A tool call request from the model.
+ */
+export type ToolCall = {
+  /** Unique ID for this tool call (used when submitting results) */
+  id: string;
+  /** Name of the tool to call */
+  name: string;
+  /** Arguments to pass to the tool */
+  arguments: Record<string, unknown>;
+};
+
+/**
+ * Result of a tool execution to submit back to the model.
+ */
+export type ToolResult = {
+  /** The ID of the tool call this result is for */
+  callId: string;
+  /** The successful result data (mutually exclusive with error) */
+  result?: unknown;
+  /** Error message if the tool failed (mutually exclusive with result) */
+  error?: string;
+};
+
+/**
+ * Response from a tool-enabled session.
+ */
+export type ToolResponse = {
+  /** Type of response */
+  type: 'text' | 'toolCall';
+  /** Text content (when type is 'text') */
+  content?: string;
+  /** Tool call request (when type is 'toolCall') */
+  toolCall?: ToolCall;
+};
+
+/**
+ * Options for creating a session with tools.
+ */
+export type SessionOptions = {
+  /** System instructions for the model */
+  instructions?: string;
+  /** Tools available for the model to use */
+  tools?: Tool[];
+};
+
+/**
+ * Callbacks for streaming with tools.
+ */
+export type StreamWithToolsCallbacks = {
+  /** Called for each token generated */
+  onToken: (token: string) => void;
+  /** Called when the model wants to use a tool */
+  onToolCall: (toolCall: ToolCall) => void;
+};
+
+/**
+ * Tool call event emitted during streaming.
+ */
+export type ToolCallEvent = {
+  sessionId: string;
+  toolCall: ToolCall;
+};
+
 /**
  * Events emitted by the ExpoFoundationModels module.
  */
 export type ExpoFoundationModelsModuleEvents = {
   onToken: (event: TokenEvent) => void;
   onPartialSchema: (event: PartialSchemaEvent) => void;
+  onToolCall: (event: ToolCallEvent) => void;
 };

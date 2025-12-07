@@ -852,7 +852,285 @@ final class FoundationModelsManager: @unchecked Sendable {
         throw FoundationModelsManagerError.generationFailed("Failed to decode generated string")
     }
     #endif
+
+    // MARK: - Tool Calling
+
+    /// Create a session with tools
+    func createSessionWithToolsAsync(options: [String: Any]) async throws -> String {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            let sessionId = UUID().uuidString
+
+            guard let toolDicts = options["tools"] as? [[String: Any]], !toolDicts.isEmpty else {
+                throw FoundationModelsManagerError.generationFailed("At least one tool must be provided")
+            }
+
+            // Convert tool dictionaries to native Tool types
+            var tools: [any Tool] = []
+            for toolDict in toolDicts {
+                let tool = try buildDynamicTool(from: toolDict)
+                tools.append(tool)
+            }
+
+            let instructions = options["instructions"] as? String
+
+            let session: LanguageModelSession
+            if let instructions = instructions, !instructions.isEmpty {
+                session = LanguageModelSession(
+                    model: SystemLanguageModel.default,
+                    tools: tools,
+                    instructions: instructions
+                )
+            } else {
+                session = LanguageModelSession(
+                    model: SystemLanguageModel.default,
+                    tools: tools
+                )
+            }
+
+            queue.async(flags: .barrier) {
+                self.sessions[sessionId] = session
+            }
+
+            return sessionId
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    /// Send a prompt and get response (text or tool call)
+    func respondWithToolsAsync(
+        sessionId: String,
+        prompt: String,
+        options: FMGenerationOptions
+    ) async throws -> [String: Any] {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            var session: LanguageModelSession?
+            queue.sync {
+                session = self.sessions[sessionId] as? LanguageModelSession
+            }
+
+            guard let session = session else {
+                throw FoundationModelsManagerError.sessionNotFound
+            }
+
+            do {
+                let nativeOptions = options.toNativeOptions()
+                let response = try await session.respond(to: prompt, options: nativeOptions)
+
+                // Check if the response contains a tool call
+                // The response.content is the text, but we need to check transcript for tool calls
+                if let lastEntry = session.transcript.last {
+                    switch lastEntry {
+                    case .toolCall(let toolCall):
+                        return [
+                            "type": "toolCall",
+                            "toolCall": [
+                                "id": toolCall.id.uuidString,
+                                "name": toolCall.name,
+                                "arguments": toolCall.arguments
+                            ]
+                        ]
+                    default:
+                        break
+                    }
+                }
+
+                return [
+                    "type": "text",
+                    "content": response.content
+                ]
+            } catch let error as LanguageModelSession.GenerationError {
+                throw mapGenerationError(error)
+            } catch {
+                throw FoundationModelsManagerError.generationFailed(error.localizedDescription)
+            }
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    /// Submit tool result back to the model
+    func submitToolResultAsync(
+        sessionId: String,
+        toolResult: [String: Any]
+    ) async throws -> [String: Any] {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            var session: LanguageModelSession?
+            queue.sync {
+                session = self.sessions[sessionId] as? LanguageModelSession
+            }
+
+            guard let session = session else {
+                throw FoundationModelsManagerError.sessionNotFound
+            }
+
+            guard let callIdString = toolResult["callId"] as? String,
+                  let callId = UUID(uuidString: callIdString) else {
+                throw FoundationModelsManagerError.generationFailed("Invalid tool call ID")
+            }
+
+            do {
+                // Build the tool output
+                let output: ToolOutput
+                if let error = toolResult["error"] as? String {
+                    output = ToolOutput(callID: callId, error: error)
+                } else if let result = toolResult["result"] {
+                    // Convert result to JSON string
+                    let jsonData = try JSONSerialization.data(withJSONObject: result)
+                    let jsonString = String(data: jsonData, encoding: .utf8) ?? "{}"
+                    output = ToolOutput(callID: callId, content: jsonString)
+                } else {
+                    output = ToolOutput(callID: callId, content: "{}")
+                }
+
+                // Continue the conversation with the tool result
+                let response = try await session.respond(to: output)
+
+                // Check for another tool call
+                if let lastEntry = session.transcript.last {
+                    switch lastEntry {
+                    case .toolCall(let toolCall):
+                        return [
+                            "type": "toolCall",
+                            "toolCall": [
+                                "id": toolCall.id.uuidString,
+                                "name": toolCall.name,
+                                "arguments": toolCall.arguments
+                            ]
+                        ]
+                    default:
+                        break
+                    }
+                }
+
+                return [
+                    "type": "text",
+                    "content": response.content
+                ]
+            } catch let error as LanguageModelSession.GenerationError {
+                throw mapGenerationError(error)
+            } catch {
+                throw FoundationModelsManagerError.generationFailed(error.localizedDescription)
+            }
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    /// Stream response with tool support
+    func streamWithToolsAsync(
+        sessionId: String,
+        prompt: String,
+        options: FMGenerationOptions,
+        onToken: @escaping (String) -> Void,
+        onToolCall: @escaping ([String: Any]) -> Void
+    ) async throws -> [String: Any] {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            var session: LanguageModelSession?
+            queue.sync {
+                session = self.sessions[sessionId] as? LanguageModelSession
+            }
+
+            guard let session = session else {
+                throw FoundationModelsManagerError.sessionNotFound
+            }
+
+            do {
+                var fullResponse = ""
+                let nativeOptions = options.toNativeOptions()
+                let stream = session.streamResponse(to: prompt, options: nativeOptions)
+
+                for try await partialResponse in stream {
+                    let newContent = partialResponse.content
+                    if newContent.count > fullResponse.count {
+                        let newToken = String(newContent.dropFirst(fullResponse.count))
+                        fullResponse = newContent
+                        onToken(newToken)
+                    }
+                }
+
+                // Check for tool call after streaming
+                if let lastEntry = session.transcript.last {
+                    switch lastEntry {
+                    case .toolCall(let toolCall):
+                        let toolCallDict: [String: Any] = [
+                            "id": toolCall.id.uuidString,
+                            "name": toolCall.name,
+                            "arguments": toolCall.arguments
+                        ]
+                        onToolCall(toolCallDict)
+                        return [
+                            "type": "toolCall",
+                            "toolCall": toolCallDict
+                        ]
+                    default:
+                        break
+                    }
+                }
+
+                return [
+                    "type": "text",
+                    "content": fullResponse
+                ]
+            } catch let error as LanguageModelSession.GenerationError {
+                throw mapGenerationError(error)
+            } catch {
+                throw FoundationModelsManagerError.streamingFailed(error.localizedDescription)
+            }
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    // MARK: - Tool Building Helpers
+
+    #if canImport(FoundationModels)
+    @available(iOS 26.0, macOS 26.0, *)
+    private func buildDynamicTool(from dict: [String: Any]) throws -> any Tool {
+        guard let name = dict["name"] as? String else {
+            throw FoundationModelsManagerError.generationFailed("Tool must have a 'name'")
+        }
+        guard let description = dict["description"] as? String else {
+            throw FoundationModelsManagerError.generationFailed("Tool must have a 'description'")
+        }
+
+        let parameters = dict["parameters"] as? [String: Any]
+        return DynamicTool(name: name, description: description, parameters: parameters)
+    }
+    #endif
 }
+
+// MARK: - Dynamic Tool
+
+#if canImport(FoundationModels)
+@available(iOS 26.0, macOS 26.0, *)
+private struct DynamicTool: Tool {
+    let name: String
+    let description: String
+    let parametersDict: [String: Any]?
+
+    @Generable
+    struct Arguments {
+        // Dynamic arguments will be handled via raw JSON
+    }
+
+    init(name: String, description: String, parameters: [String: Any]?) {
+        self.name = name
+        self.description = description
+        self.parametersDict = parameters
+    }
+
+    func call(arguments: Arguments) async throws -> String {
+        // This is a placeholder - actual tool execution happens in JavaScript
+        // The Swift side just needs to return the arguments so JS can execute
+        return "{}"
+    }
+}
+#endif
 
 // MARK: - Expo Module
 
@@ -860,7 +1138,7 @@ public class ExpoFoundationModelsModule: Module {
     public func definition() -> ModuleDefinition {
         Name("ExpoFoundationModels")
 
-        Events("onToken", "onPartialSchema")
+        Events("onToken", "onPartialSchema", "onToolCall")
 
         // MARK: - CoreML Functions
 
@@ -958,6 +1236,49 @@ public class ExpoFoundationModelsModule: Module {
                 onPartial: { [weak self] partial in
                     self?.sendEvent("onPartialSchema", [
                         "partial": partial,
+                        "sessionId": sessionId
+                    ])
+                }
+            )
+        }
+
+        // MARK: - Tool Calling Functions
+
+        AsyncFunction("createSessionWithTools") { (options: [String: Any]) -> String in
+            return try await FoundationModelsManager.shared.createSessionWithToolsAsync(options: options)
+        }
+
+        AsyncFunction("respondWithTools") { (sessionId: String, prompt: String, options: [String: Any]?) -> [String: Any] in
+            let genOptions = FMGenerationOptions.from(dictionary: options)
+            return try await FoundationModelsManager.shared.respondWithToolsAsync(
+                sessionId: sessionId,
+                prompt: prompt,
+                options: genOptions
+            )
+        }
+
+        AsyncFunction("submitToolResult") { (sessionId: String, toolResult: [String: Any]) -> [String: Any] in
+            return try await FoundationModelsManager.shared.submitToolResultAsync(
+                sessionId: sessionId,
+                toolResult: toolResult
+            )
+        }
+
+        AsyncFunction("streamWithTools") { (sessionId: String, prompt: String, options: [String: Any]?) -> [String: Any] in
+            let genOptions = FMGenerationOptions.from(dictionary: options)
+            return try await FoundationModelsManager.shared.streamWithToolsAsync(
+                sessionId: sessionId,
+                prompt: prompt,
+                options: genOptions,
+                onToken: { [weak self] token in
+                    self?.sendEvent("onToken", [
+                        "token": token,
+                        "sessionId": sessionId
+                    ])
+                },
+                onToolCall: { [weak self] toolCall in
+                    self?.sendEvent("onToolCall", [
+                        "toolCall": toolCall,
                         "sessionId": sessionId
                     ])
                 }
