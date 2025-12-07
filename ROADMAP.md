@@ -2,7 +2,9 @@
 
 This document outlines the implementation status and roadmap for the `expo-foundation-models` Expo module, which provides access to Apple's Foundation Models framework (iOS 26+) and CoreML.
 
-## Current Status (v0.1.0)
+## Current Status: v1.0.0 Released
+
+All planned features have been implemented. The module now provides full feature parity with Apple's Foundation Models framework.
 
 ### ✅ Implemented Features
 
@@ -12,11 +14,22 @@ This document outlines the implementation status and roadmap for the `expo-found
 - [x] Check if model is loaded
 - [x] Get list of loaded models
 
-#### Foundation Models (Basic)
-- [x] Check availability (`isAvailable`)
-- [x] Create/close sessions with optional instructions
-- [x] Text generation (`respond`)
-- [x] Streaming responses with token events (`streamResponse`, `onToken`)
+#### Foundation Models
+- [x] Availability checking with detailed reasons
+- [x] Session management with instructions
+- [x] Text generation with streaming
+- [x] Generation options (temperature, sampling, token limits)
+- [x] Structured output with JSON Schema
+- [x] Choice constraints (enum generation)
+- [x] Tool calling with function execution
+- [x] Transcript access and session history
+- [x] Session prewarm for latency reduction
+- [x] Resume sessions with initial transcript
+- [x] Guardrails configuration
+- [x] Model use case selection
+- [x] Adapter loading (Background Assets & local files)
+- [x] Adapter compilation and management
+- [x] Feedback logging for response quality
 
 ---
 
@@ -411,24 +424,27 @@ console.log(result.feedbackAttachment);
 
 ---
 
-## Implementation Priority Matrix
+## Implementation Status
 
-| Phase | Feature | Priority | Complexity | Value |
-|-------|---------|----------|------------|-------|
-| 1.1 | Detailed Availability | 🔴 High | Low | High |
-| 1.2 | GenerationOptions | 🔴 High | Low | Medium |
-| 1.3 | Error Handling | 🔴 High | Medium | High |
-| 2.1 | JSON Schema Generation | 🔴 High | High | Very High |
-| 2.2 | Enum Constraints | 🔴 High | Medium | High |
-| 3.1 | Tool Calling | 🔴 High | Very High | Very High |
-| 4.1 | Transcript Access | ✅ Done | Low | Medium |
-| 4.2 | Session Prewarm | ✅ Done | Low | Medium |
-| 4.3 | Initial Transcript | ✅ Done | Medium | Medium |
-| 5.1 | Guardrails Config | ✅ Done | Low | Medium |
-| 5.2 | Model Use Case | ✅ Done | Low | Low |
-| 6.1 | Adapter Loading | ✅ Done | High | Low |
-| 6.2 | Local Adapters | ✅ Done | Medium | Low |
-| 7.1 | Feedback Logging | ✅ Done | Medium | Low |
+All phases completed for v1.0.0 release.
+
+| Phase | Feature | Status |
+|-------|---------|--------|
+| 1.1 | Detailed Availability | ✅ Done |
+| 1.2 | GenerationOptions | ✅ Done |
+| 1.3 | Error Handling | ✅ Done |
+| 2.1 | JSON Schema Generation | ✅ Done |
+| 2.2 | Enum Constraints | ✅ Done |
+| 2.3 | Streaming Structured Output | ✅ Done |
+| 3.1 | Tool Calling | ✅ Done |
+| 4.1 | Transcript Access | ✅ Done |
+| 4.2 | Session Prewarm | ✅ Done |
+| 4.3 | Initial Transcript | ✅ Done |
+| 5.1 | Guardrails Config | ✅ Done |
+| 5.2 | Model Use Case | ✅ Done |
+| 6.1 | Adapter Loading | ✅ Done |
+| 6.2 | Local Adapters | ✅ Done |
+| 7.1 | Feedback Logging | ✅ Done |
 
 ---
 
@@ -465,4 +481,4 @@ Contributions are welcome! Please check the issues for tasks marked as "help wan
 - **v0.6.0** - Phase 5: Advanced configuration (guardrails, use case, combined config)
 - **v0.7.0** - Phase 6: Adapters (load, compile, unload, compatibility checking)
 - **v0.8.0** - Phase 7: Feedback & Analytics (log feedback with sentiment, issues, desired response)
-- **v1.0.0** - (Planned) Full feature parity with Foundation Models framework
+- **v1.0.0** - Full feature parity with Apple's Foundation Models framework

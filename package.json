@@ -1,7 +1,7 @@
 {
   "name": "expo-foundation-models",
-  "version": "0.1.0",
-  "description": "Apple's Foundation Models API",
+  "version": "1.0.0",
+  "description": "Expo module for Apple's Foundation Models (on-device LLM) and CoreML",
   "main": "build/index.js",
   "types": "build/index.d.ts",
   "scripts": {
