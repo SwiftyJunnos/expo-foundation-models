@@ -14,7 +14,7 @@ class ExpoFoundationModelsModule : Module() {
     override fun definition() = ModuleDefinition {
         Name("ExpoFoundationModels")
 
-        Events("onToken", "onPartialSchema", "onToolCall")
+        Events("onToken", "onPartialSchema", "onToolCall", "onAdapterDownload")
 
         // CoreML Functions (iOS only)
 
@@ -97,6 +97,56 @@ class ExpoFoundationModelsModule : Module() {
         }
 
         AsyncFunction("streamWithTools") { sessionId: String, prompt: String, options: Map<String, Any>?, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        // Session Management Functions (iOS only)
+
+        AsyncFunction("getTranscript") { sessionId: String, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("prewarm") { sessionId: String, options: Map<String, Any>?, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("createSessionWithTranscript") { options: Map<String, Any>, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        // Advanced Configuration Functions (iOS only)
+
+        AsyncFunction("createSessionWithConfig") { options: Map<String, Any>, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        // Adapter Functions (iOS only)
+
+        AsyncFunction("loadAdapter") { name: String, options: Map<String, Any>?, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("loadAdapterFromFile") { filePath: String, options: Map<String, Any>?, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("compileAdapter") { adapterId: String, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("unloadAdapter") { adapterId: String, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("getAdapterDownloadStatus") { name: String, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("removeObsoleteAdapters") { promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("isAdapterCompatible") { name: String, promise: Promise ->
             promise.reject(PlatformNotSupportedException())
         }
     }

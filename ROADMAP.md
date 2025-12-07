@@ -214,7 +214,7 @@ const response = await FoundationModels.respond(
 ## Phase 4: Session & Transcript Management (Medium Priority)
 
 ### 4.1 Transcript Access
-**Status:** 🔴 Not Started
+**Status:** ✅ Completed
 
 Access conversation history within a session.
 
@@ -223,8 +223,8 @@ type TranscriptEntry =
   | { type: 'instructions'; content: string }
   | { type: 'prompt'; content: string }
   | { type: 'response'; content: string }
-  | { type: 'toolCall'; name: string; arguments: Record<string, unknown> }
-  | { type: 'toolOutput'; content: string };
+  | { type: 'toolCall'; name: string; arguments: Record<string, unknown>; callId: string }
+  | { type: 'toolOutput'; content: string; callId: string };
 
 const transcript = await FoundationModels.getTranscript(sessionId);
 // Returns: TranscriptEntry[]
@@ -233,7 +233,7 @@ const transcript = await FoundationModels.getTranscript(sessionId);
 ---
 
 ### 4.2 Session Prewarm
-**Status:** 🔴 Not Started
+**Status:** ✅ Completed
 
 Reduce latency by preloading resources.
 
@@ -246,17 +246,15 @@ await FoundationModels.prewarm(sessionId, {
 ---
 
 ### 4.3 Session with Initial Transcript
-**Status:** 🔴 Not Started
+**Status:** ✅ Completed
 
 Resume sessions with existing conversation history.
 
 ```typescript
-const sessionId = await FoundationModels.createSession({
-  transcriptEntries: [
-    { type: 'prompt', content: 'Hello!' },
-    { type: 'response', content: 'Hi! How can I help?' }
-  ]
-});
+const sessionId = await FoundationModels.createSessionWithTranscript([
+  { type: 'prompt', content: 'Hello!' },
+  { type: 'response', content: 'Hi! How can I help?' }
+], 'You are a helpful assistant');
 ```
 
 ---
@@ -264,7 +262,7 @@ const sessionId = await FoundationModels.createSession({
 ## Phase 5: Advanced Configuration (Medium Priority)
 
 ### 5.1 Guardrails Configuration
-**Status:** 🔴 Not Started
+**Status:** ✅ Completed
 
 Configure safety guardrails for content generation.
 
@@ -282,16 +280,36 @@ const sessionId = await FoundationModels.createSession({
 
 ---
 
-### 5.2 Model Selection
-**Status:** 🔴 Not Started
+### 5.2 Model Use Case Selection
+**Status:** ✅ Completed
 
-Support different model configurations.
+Support different model use cases.
+
+```typescript
+type ModelUseCase = 'general' | 'contentTagging';
+
+const sessionId = await FoundationModels.createSession({
+  useCase: 'contentTagging'
+});
+```
+
+**Use Cases:**
+- `general`: General-purpose prompting (default)
+- `contentTagging`: Optimized for categorizing and tagging content
+
+---
+
+### 5.3 Combined Configuration
+**Status:** ✅ Completed
+
+Create sessions with full configuration including guardrails, use case, instructions, and tools.
 
 ```typescript
 const sessionId = await FoundationModels.createSession({
-  model: {
-    useCase: 'general' // Future: could support other use cases
-  }
+  instructions: 'You are a content moderator',
+  guardrails: 'permissiveContentTransformations',
+  useCase: 'contentTagging',
+  tools: [myTool]
 });
 ```
 
@@ -300,37 +318,59 @@ const sessionId = await FoundationModels.createSession({
 ## Phase 6: Adapters / Fine-tuned Models (Low Priority)
 
 ### 6.1 Load Custom Adapters
-**Status:** 🔴 Not Started
+**Status:** ✅ Completed
 
-Load fine-tuned model adapters.
+Load fine-tuned model adapters from Background Assets.
 
 ```typescript
 // Load adapter from Background Assets
 const adapter = await FoundationModels.loadAdapter('myCustomAdapter');
+console.log('Adapter loaded:', adapter.id, adapter.name);
 
 // Create session with adapted model
 const sessionId = await FoundationModels.createSession({
-  adapter: adapter.id
+  adapterId: adapter.id,
+  guardrails: 'default'
 });
 ```
 
-**Requirements:**
-- Integration with Background Assets framework
-- Adapter compatibility checking
-- Download progress tracking
-- Adapter compilation support
+**Implemented Features:**
+- `loadAdapter(name, options?)` - Load adapter from Background Assets
+- `compileAdapter(adapterId)` - Compile adapter for faster inference
+- `unloadAdapter(adapterId)` - Unload adapter to free memory
+- `getAdapterDownloadStatus(name)` - Check download status
+- `isAdapterCompatible(name)` - Check adapter compatibility
+- `removeObsoleteAdapters()` - Remove incompatible adapters
 
 ---
 
 ### 6.2 Local Adapter Loading
-**Status:** 🔴 Not Started
+**Status:** ✅ Completed
 
 Load adapters from local `.fmadapter` files.
 
 ```typescript
 const adapter = await FoundationModels.loadAdapterFromFile(
-  '/path/to/my_adapter.fmadapter'
+  '/path/to/my_adapter.fmadapter',
+  { compile: true }
 );
+```
+
+---
+
+### 6.3 Adapter Info & Metadata
+**Status:** ✅ Completed
+
+Access adapter information and creator-defined metadata.
+
+```typescript
+type AdapterInfo = {
+  id: string;           // Unique adapter instance ID
+  name: string;         // Adapter name
+  isReady: boolean;     // Whether adapter is ready for use
+  isCompiled: boolean;  // Whether adapter has been compiled
+  metadata?: Record<string, unknown>; // Creator-defined metadata
+};
 ```
 
 ---
@@ -364,13 +404,13 @@ await FoundationModels.logFeedback(sessionId, {
 | 2.1 | JSON Schema Generation | 🔴 High | High | Very High |
 | 2.2 | Enum Constraints | 🔴 High | Medium | High |
 | 3.1 | Tool Calling | 🔴 High | Very High | Very High |
-| 4.1 | Transcript Access | 🟡 Medium | Low | Medium |
-| 4.2 | Session Prewarm | 🟡 Medium | Low | Medium |
-| 4.3 | Initial Transcript | 🟡 Medium | Medium | Medium |
-| 5.1 | Guardrails Config | 🟡 Medium | Low | Medium |
-| 5.2 | Model Selection | 🟡 Medium | Low | Low |
-| 6.1 | Adapter Loading | 🟢 Low | High | Low |
-| 6.2 | Local Adapters | 🟢 Low | Medium | Low |
+| 4.1 | Transcript Access | ✅ Done | Low | Medium |
+| 4.2 | Session Prewarm | ✅ Done | Low | Medium |
+| 4.3 | Initial Transcript | ✅ Done | Medium | Medium |
+| 5.1 | Guardrails Config | ✅ Done | Low | Medium |
+| 5.2 | Model Use Case | ✅ Done | Low | Low |
+| 6.1 | Adapter Loading | ✅ Done | High | Low |
+| 6.2 | Local Adapters | ✅ Done | Medium | Low |
 | 7.1 | Feedback Logging | 🟢 Low | Medium | Low |
 
 ---
@@ -401,6 +441,10 @@ Contributions are welcome! Please check the issues for tasks marked as "help wan
 ## Version History
 
 - **v0.1.0** - Initial implementation with basic text generation and streaming
-- **v0.2.0** - (Planned) Phase 1 completion
-- **v0.3.0** - (Planned) Structured output support
+- **v0.2.0** - Phase 1: Core API improvements (availability, generation options, error handling)
+- **v0.3.0** - Phase 2: Structured output (JSON schema, choices, streaming)
+- **v0.4.0** - Phase 3: Tool calling (session with tools, tool execution, streaming)
+- **v0.5.0** - Phase 4: Session management (transcript access, prewarm, initial transcript)
+- **v0.6.0** - Phase 5: Advanced configuration (guardrails, use case, combined config)
+- **v0.7.0** - Phase 6: Adapters (load, compile, unload, compatibility checking)
 - **v1.0.0** - (Planned) Full feature parity with Foundation Models framework

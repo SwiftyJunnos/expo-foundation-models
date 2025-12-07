@@ -38,6 +38,23 @@ jest.mock('./src/ExpoFoundationModelsModule', () => ({
     submitToolResult: jest.fn(),
     streamWithTools: jest.fn(),
 
+    // Session Management functions
+    getTranscript: jest.fn(),
+    prewarm: jest.fn(),
+    createSessionWithTranscript: jest.fn(),
+
+    // Guardrails & Configuration functions
+    createSessionWithConfig: jest.fn(),
+
+    // Adapter functions
+    loadAdapter: jest.fn(),
+    loadAdapterFromFile: jest.fn(),
+    compileAdapter: jest.fn(),
+    unloadAdapter: jest.fn(),
+    getAdapterDownloadStatus: jest.fn(),
+    removeObsoleteAdapters: jest.fn(),
+    isAdapterCompatible: jest.fn(),
+
     // Event listener
     addListener: jest.fn(() => ({
       remove: jest.fn(),

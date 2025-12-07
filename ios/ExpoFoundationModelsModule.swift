@@ -407,6 +407,8 @@ final class FoundationModelsManager: @unchecked Sendable {
 
     // Store sessions as Any to avoid @available on stored property
     private var sessions: [String: Any] = [:]
+    // Store loaded adapters
+    private var adapters: [String: Any] = [:]
     private let queue = DispatchQueue(label: "expo.modules.foundationmodels.fm", attributes: .concurrent)
 
     private init() {}
@@ -1102,6 +1104,434 @@ final class FoundationModelsManager: @unchecked Sendable {
         return DynamicTool(name: name, description: description, parameters: parameters)
     }
     #endif
+
+    // MARK: - Session Management
+
+    /// Get the transcript (conversation history) for a session
+    func getTranscriptAsync(sessionId: String) async throws -> [[String: Any]] {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            var session: LanguageModelSession?
+            queue.sync {
+                session = self.sessions[sessionId] as? LanguageModelSession
+            }
+
+            guard let session = session else {
+                throw FoundationModelsManagerError.sessionNotFound
+            }
+
+            var entries: [[String: Any]] = []
+
+            for entry in session.transcript {
+                switch entry {
+                case .instructions(let instructions):
+                    entries.append([
+                        "type": "instructions",
+                        "content": instructions.content
+                    ])
+                case .prompt(let prompt):
+                    entries.append([
+                        "type": "prompt",
+                        "content": prompt.content
+                    ])
+                case .response(let response):
+                    entries.append([
+                        "type": "response",
+                        "content": response.content
+                    ])
+                case .toolCall(let toolCall):
+                    entries.append([
+                        "type": "toolCall",
+                        "name": toolCall.name,
+                        "arguments": toolCall.arguments,
+                        "callId": toolCall.id.uuidString
+                    ])
+                case .toolOutput(let toolOutput):
+                    entries.append([
+                        "type": "toolOutput",
+                        "content": toolOutput.content,
+                        "callId": toolOutput.callID.uuidString
+                    ])
+                @unknown default:
+                    // Skip unknown entry types
+                    break
+                }
+            }
+
+            return entries
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    /// Prewarm a session to reduce latency
+    func prewarmAsync(sessionId: String, options: [String: Any]?) async throws {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            var session: LanguageModelSession?
+            queue.sync {
+                session = self.sessions[sessionId] as? LanguageModelSession
+            }
+
+            guard let session = session else {
+                throw FoundationModelsManagerError.sessionNotFound
+            }
+
+            // Extract prompt prefix if provided
+            let promptPrefix = options?["promptPrefix"] as? String
+
+            // Prewarm the session
+            if let prefix = promptPrefix {
+                try await session.prewarm(promptPrefix: prefix)
+            } else {
+                try await session.prewarm()
+            }
+        }
+        #else
+        throw FoundationModelsManagerError.notAvailable
+        #endif
+    }
+
+    /// Create a session with initial transcript entries
+    func createSessionWithTranscriptAsync(options: [String: Any]) async throws -> String {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            let sessionId = UUID().uuidString
+
+            guard let entryDicts = options["transcriptEntries"] as? [[String: Any]], !entryDicts.isEmpty else {
+                throw FoundationModelsManagerError.generationFailed("Transcript entries must be a non-empty array")
+            }
+
+            // Convert dictionaries to Transcript.Entry
+            var transcriptEntries: [Transcript.Entry] = []
+
+            for entryDict in entryDicts {
+                guard let type = entryDict["type"] as? String else {
+                    throw FoundationModelsManagerError.generationFailed("Each entry must have a 'type'")
+                }
+
+                switch type {
+                case "instructions":
+                    if let content = entryDict["content"] as? String {
+                        transcriptEntries.append(.instructions(.init(content: content)))
+                    }
+                case "prompt":
+                    if let content = entryDict["content"] as? String {
+                        transcriptEntries.append(.prompt(.init(content: content)))
+                    }
+                case "response":
+                    if let content = entryDict["content"] as? String {
+                        transcriptEntries.append(.response(.init(content: content)))
+                    }
+                case "toolCall":
+                    if let name = entryDict["name"] as? String,
+                       let arguments = entryDict["arguments"] as? [String: Any],
+                       let callIdString = entryDict["callId"] as? String,
+                       let callId = UUID(uuidString: callIdString) {
+                        transcriptEntries.append(.toolCall(.init(
+                            id: callId,
+                            name: name,
+                            arguments: arguments
+                        )))
+                    }
+                case "toolOutput":
+                    if let content = entryDict["content"] as? String,
+                       let callIdString = entryDict["callId"] as? String,
+                       let callId = UUID(uuidString: callIdString) {
+                        transcriptEntries.append(.toolOutput(.init(
+                            callID: callId,
+                            content: content
+                        )))
+                    }
+                default:
+                    throw FoundationModelsManagerError.generationFailed("Unknown entry type: \(type)")
+                }
+            }
+
+            let instructions = options["instructions"] as? String
+
+            // Create Transcript from entries
+            let transcript = Transcript(entries: transcriptEntries)
+
+            // Create session with transcript
+            let session: LanguageModelSession
+            if let instructions = instructions, !instructions.isEmpty {
+                session = LanguageModelSession(
+                    model: SystemLanguageModel.default,
+                    instructions: instructions,
+                    transcript: transcript
+                )
+            } else {
+                session = LanguageModelSession(
+                    model: SystemLanguageModel.default,
+                    transcript: transcript
+                )
+            }
+
+            queue.async(flags: .barrier) {
+                self.sessions[sessionId] = session
+            }
+
+            return sessionId
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    // MARK: - Advanced Configuration
+
+    /// Create a session with extended configuration (guardrails, useCase, tools, adapter)
+    func createSessionWithConfigAsync(options: [String: Any]) async throws -> String {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            let sessionId = UUID().uuidString
+
+            // Parse guardrails
+            var guardrails: SystemLanguageModel.Guardrails = .default
+            if let guardrailsString = options["guardrails"] as? String {
+                switch guardrailsString {
+                case "default":
+                    guardrails = .default
+                case "permissiveContentTransformations":
+                    guardrails = .permissiveContentTransformations
+                default:
+                    guardrails = .default
+                }
+            }
+
+            // Parse useCase
+            var useCase: SystemLanguageModel.UseCase = .general
+            if let useCaseString = options["useCase"] as? String {
+                switch useCaseString {
+                case "general":
+                    useCase = .general
+                case "contentTagging":
+                    useCase = .contentTagging
+                default:
+                    useCase = .general
+                }
+            }
+
+            // Create the model - with adapter if provided, otherwise with useCase/guardrails
+            let model: SystemLanguageModel
+            if let adapterId = options["adapterId"] as? String {
+                // Get the adapter from storage
+                var adapter: SystemLanguageModel.Adapter?
+                queue.sync {
+                    adapter = self.adapters[adapterId] as? SystemLanguageModel.Adapter
+                }
+                guard let loadedAdapter = adapter else {
+                    throw FoundationModelsManagerError(
+                        type: .generationFailed,
+                        message: "Adapter not found: \(adapterId)"
+                    )
+                }
+                model = SystemLanguageModel(adapter: loadedAdapter, guardrails: guardrails)
+            } else {
+                model = SystemLanguageModel(useCase: useCase, guardrails: guardrails)
+            }
+
+            // Parse tools if provided
+            var tools: [any Tool] = []
+            if let toolDicts = options["tools"] as? [[String: Any]], !toolDicts.isEmpty {
+                for toolDict in toolDicts {
+                    let tool = try buildDynamicTool(from: toolDict)
+                    tools.append(tool)
+                }
+            }
+
+            let instructions = options["instructions"] as? String
+
+            // Create the session with the configured model
+            let session: LanguageModelSession
+            if !tools.isEmpty {
+                if let instructions = instructions, !instructions.isEmpty {
+                    session = LanguageModelSession(
+                        model: model,
+                        tools: tools,
+                        instructions: instructions
+                    )
+                } else {
+                    session = LanguageModelSession(
+                        model: model,
+                        tools: tools
+                    )
+                }
+            } else {
+                if let instructions = instructions, !instructions.isEmpty {
+                    session = LanguageModelSession(
+                        model: model,
+                        instructions: instructions
+                    )
+                } else {
+                    session = LanguageModelSession(model: model)
+                }
+            }
+
+            queue.async(flags: .barrier) {
+                self.sessions[sessionId] = session
+            }
+
+            return sessionId
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    // MARK: - Adapter Management
+
+    /// Load an adapter by name from Background Assets
+    func loadAdapterAsync(name: String, options: [String: Any]?) async throws -> [String: Any] {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            do {
+                let adapter = try SystemLanguageModel.Adapter(name: name)
+                let adapterId = UUID().uuidString
+
+                // Optionally compile the adapter
+                if let compile = options?["compile"] as? Bool, compile {
+                    try await adapter.compile()
+                }
+
+                queue.async(flags: .barrier) {
+                    self.adapters[adapterId] = adapter
+                }
+
+                return [
+                    "id": adapterId,
+                    "name": name,
+                    "isReady": true,
+                    "isCompiled": options?["compile"] as? Bool ?? false,
+                    "metadata": adapter.creatorDefinedMetadata
+                ]
+            } catch {
+                throw FoundationModelsManagerError.generationFailed("Failed to load adapter: \(error.localizedDescription)")
+            }
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    /// Load an adapter from a local file
+    func loadAdapterFromFileAsync(filePath: String, options: [String: Any]?) async throws -> [String: Any] {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            do {
+                let fileURL = URL(fileURLWithPath: filePath)
+                let adapter = try SystemLanguageModel.Adapter(fileURL: fileURL)
+                let adapterId = UUID().uuidString
+
+                // Extract name from file path
+                let name = fileURL.deletingPathExtension().lastPathComponent
+
+                // Optionally compile the adapter
+                if let compile = options?["compile"] as? Bool, compile {
+                    try await adapter.compile()
+                }
+
+                queue.async(flags: .barrier) {
+                    self.adapters[adapterId] = adapter
+                }
+
+                return [
+                    "id": adapterId,
+                    "name": name,
+                    "isReady": true,
+                    "isCompiled": options?["compile"] as? Bool ?? false,
+                    "metadata": adapter.creatorDefinedMetadata
+                ]
+            } catch {
+                throw FoundationModelsManagerError.generationFailed("Failed to load adapter from file: \(error.localizedDescription)")
+            }
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    /// Compile an adapter for faster inference
+    func compileAdapterAsync(adapterId: String) async throws {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            var adapter: SystemLanguageModel.Adapter?
+            queue.sync {
+                adapter = self.adapters[adapterId] as? SystemLanguageModel.Adapter
+            }
+
+            guard let loadedAdapter = adapter else {
+                throw FoundationModelsManagerError.generationFailed("Adapter not found: \(adapterId)")
+            }
+
+            do {
+                try await loadedAdapter.compile()
+            } catch {
+                throw FoundationModelsManagerError.generationFailed("Failed to compile adapter: \(error.localizedDescription)")
+            }
+            return
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    /// Unload an adapter
+    func unloadAdapter(adapterId: String) throws {
+        var found = false
+        queue.sync {
+            found = adapters[adapterId] != nil
+        }
+
+        guard found else {
+            throw FoundationModelsManagerError.generationFailed("Adapter not found: \(adapterId)")
+        }
+
+        queue.async(flags: .barrier) {
+            self.adapters.removeValue(forKey: adapterId)
+        }
+    }
+
+    /// Get adapter download status
+    func getAdapterDownloadStatusAsync(name: String) async throws -> [String: Any] {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            let assetPackIds = SystemLanguageModel.Adapter.compatibleAdapterIdentifiers(name: name)
+
+            if assetPackIds.isEmpty {
+                return ["state": "notStarted"]
+            }
+
+            // For now, return a simple status - full implementation would integrate with AssetPackManager
+            // Check if adapter can be loaded (indicates it's downloaded)
+            do {
+                _ = try SystemLanguageModel.Adapter(name: name)
+                return ["state": "completed"]
+            } catch {
+                return ["state": "notStarted"]
+            }
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    /// Remove obsolete adapters
+    func removeObsoleteAdaptersAsync() async throws {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            try SystemLanguageModel.Adapter.removeObsoleteAdapters()
+            return
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    /// Check if adapter is compatible
+    func isAdapterCompatibleAsync(name: String) async throws -> Bool {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            let assetPackIds = SystemLanguageModel.Adapter.compatibleAdapterIdentifiers(name: name)
+            return !assetPackIds.isEmpty
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
 }
 
 // MARK: - Dynamic Tool
@@ -1138,7 +1568,7 @@ public class ExpoFoundationModelsModule: Module {
     public func definition() -> ModuleDefinition {
         Name("ExpoFoundationModels")
 
-        Events("onToken", "onPartialSchema", "onToolCall")
+        Events("onToken", "onPartialSchema", "onToolCall", "onAdapterDownload")
 
         // MARK: - CoreML Functions
 
@@ -1283,6 +1713,56 @@ public class ExpoFoundationModelsModule: Module {
                     ])
                 }
             )
+        }
+
+        // MARK: - Session Management Functions
+
+        AsyncFunction("getTranscript") { (sessionId: String) -> [[String: Any]] in
+            return try await FoundationModelsManager.shared.getTranscriptAsync(sessionId: sessionId)
+        }
+
+        AsyncFunction("prewarm") { (sessionId: String, options: [String: Any]?) in
+            try await FoundationModelsManager.shared.prewarmAsync(sessionId: sessionId, options: options)
+        }
+
+        AsyncFunction("createSessionWithTranscript") { (options: [String: Any]) -> String in
+            return try await FoundationModelsManager.shared.createSessionWithTranscriptAsync(options: options)
+        }
+
+        // MARK: - Advanced Configuration Functions
+
+        AsyncFunction("createSessionWithConfig") { (options: [String: Any]) -> String in
+            return try await FoundationModelsManager.shared.createSessionWithConfigAsync(options: options)
+        }
+
+        // MARK: - Adapter Functions
+
+        AsyncFunction("loadAdapter") { (name: String, options: [String: Any]?) -> [String: Any] in
+            return try await FoundationModelsManager.shared.loadAdapterAsync(name: name, options: options)
+        }
+
+        AsyncFunction("loadAdapterFromFile") { (filePath: String, options: [String: Any]?) -> [String: Any] in
+            return try await FoundationModelsManager.shared.loadAdapterFromFileAsync(filePath: filePath, options: options)
+        }
+
+        AsyncFunction("compileAdapter") { (adapterId: String) in
+            try await FoundationModelsManager.shared.compileAdapterAsync(adapterId: adapterId)
+        }
+
+        AsyncFunction("unloadAdapter") { (adapterId: String) in
+            try FoundationModelsManager.shared.unloadAdapter(adapterId: adapterId)
+        }
+
+        AsyncFunction("getAdapterDownloadStatus") { (name: String) -> [String: Any] in
+            return try await FoundationModelsManager.shared.getAdapterDownloadStatusAsync(name: name)
+        }
+
+        AsyncFunction("removeObsoleteAdapters") {
+            try await FoundationModelsManager.shared.removeObsoleteAdaptersAsync()
+        }
+
+        AsyncFunction("isAdapterCompatible") { (name: String) -> Bool in
+            return try await FoundationModelsManager.shared.isAdapterCompatibleAsync(name: name)
         }
     }
 }

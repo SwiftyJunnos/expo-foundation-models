@@ -21,6 +21,17 @@ import type {
   SessionOptions,
   StreamWithToolsCallbacks,
   ToolCallEvent,
+  TranscriptEntry,
+  TranscriptEntryType,
+  PrewarmOptions,
+  CreateSessionWithTranscriptOptions,
+  GuardrailsMode,
+  ModelUseCase,
+  ExtendedSessionOptions,
+  AdapterDownloadStatus,
+  AdapterInfo,
+  LoadAdapterOptions,
+  AdapterDownloadEvent,
 } from './ExpoFoundationModels.types';
 
 export type {
@@ -44,6 +55,17 @@ export type {
   SessionOptions,
   StreamWithToolsCallbacks,
   ToolCallEvent,
+  TranscriptEntry,
+  TranscriptEntryType,
+  PrewarmOptions,
+  CreateSessionWithTranscriptOptions,
+  GuardrailsMode,
+  ModelUseCase,
+  ExtendedSessionOptions,
+  AdapterDownloadStatus,
+  AdapterInfo,
+  LoadAdapterOptions,
+  AdapterDownloadEvent,
 };
 
 /**
@@ -340,11 +362,29 @@ export const FoundationModels = {
   /**
    * Create a new Foundation Models session.
    *
-   * @param instructions - Optional system instructions for the LLM
+   * @param optionsOrInstructions - Session options or legacy string instructions
    * @returns Promise resolving to a session ID
    * @throws {FoundationModelsError} If session creation fails
+   *
+   * @example
+   * ```typescript
+   * // Legacy API with string instructions
+   * const sessionId = await FoundationModels.createSession('You are helpful');
+   *
+   * // New API with options object
+   * const sessionId = await FoundationModels.createSession({
+   *   instructions: 'You are helpful',
+   *   guardrails: 'default',
+   *   useCase: 'general'
+   * });
+   *
+   * // Permissive mode for content transformation
+   * const sessionId = await FoundationModels.createSession({
+   *   guardrails: 'permissiveContentTransformations'
+   * });
+   * ```
    */
-  async createSession(instructions?: string): Promise<string> {
+  async createSession(optionsOrInstructions?: string | ExtendedSessionOptions): Promise<string> {
     if (Platform.OS !== 'ios') {
       throw new FoundationModelsError('Foundation Models is only available on iOS', {
         type: 'notAvailable',
@@ -353,7 +393,27 @@ export const FoundationModels = {
     }
 
     try {
-      return await ExpoFoundationModelsModule.createSession(instructions ?? null);
+      // Handle legacy string API
+      if (optionsOrInstructions === undefined || typeof optionsOrInstructions === 'string') {
+        return await ExpoFoundationModelsModule.createSession(optionsOrInstructions ?? null);
+      }
+
+      // Handle new options object API
+      const options = optionsOrInstructions;
+
+      // If options contain advanced config (tools, guardrails, useCase, or adapterId), use createSessionWithConfig
+      if (options.tools && options.tools.length > 0 || options.guardrails || options.useCase || options.adapterId) {
+        return await ExpoFoundationModelsModule.createSessionWithConfig({
+          instructions: options.instructions,
+          guardrails: options.guardrails,
+          useCase: options.useCase,
+          tools: options.tools,
+          adapterId: options.adapterId,
+        });
+      }
+
+      // Fall back to simple createSession for instructions-only
+      return await ExpoFoundationModelsModule.createSession(options.instructions ?? null);
     } catch (error) {
       throw parseNativeError(error, 'Failed to create session', 'SESSION_FAILED');
     }
@@ -870,6 +930,337 @@ export const FoundationModels = {
     } finally {
       tokenSubscription.remove();
       toolCallSubscription.remove();
+    }
+  },
+
+  // MARK: - Session Management
+
+  /**
+   * Get the transcript (conversation history) of a session.
+   *
+   * @param sessionId - The session ID
+   * @returns Promise resolving to array of transcript entries
+   * @throws {FoundationModelsError} If session not found
+   *
+   * @example
+   * ```typescript
+   * const transcript = await FoundationModels.getTranscript(sessionId);
+   * for (const entry of transcript) {
+   *   switch (entry.type) {
+   *     case 'prompt':
+   *       console.log('User:', entry.content);
+   *       break;
+   *     case 'response':
+   *       console.log('Assistant:', entry.content);
+   *       break;
+   *   }
+   * }
+   * ```
+   */
+  async getTranscript(sessionId: string): Promise<TranscriptEntry[]> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!sessionId || typeof sessionId !== 'string') {
+      throw new FoundationModelsError('Session ID must be a non-empty string', {
+        type: 'sessionNotFound',
+      });
+    }
+
+    try {
+      return await ExpoFoundationModelsModule.getTranscript(sessionId);
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to get transcript', 'TRANSCRIPT_FAILED');
+    }
+  },
+
+  /**
+   * Prewarm a session to reduce latency for subsequent requests.
+   *
+   * This loads necessary resources into memory and optionally caches a prompt prefix.
+   *
+   * @param sessionId - The session ID
+   * @param options - Optional prewarm options
+   * @throws {FoundationModelsError} If session not found
+   *
+   * @example
+   * ```typescript
+   * // Prewarm with a common prompt prefix
+   * await FoundationModels.prewarm(sessionId, {
+   *   promptPrefix: 'You are an expert programmer helping with:'
+   * });
+   * ```
+   */
+  async prewarm(sessionId: string, options?: PrewarmOptions): Promise<void> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!sessionId || typeof sessionId !== 'string') {
+      throw new FoundationModelsError('Session ID must be a non-empty string', {
+        type: 'sessionNotFound',
+      });
+    }
+
+    try {
+      await ExpoFoundationModelsModule.prewarm(sessionId, options ?? null);
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to prewarm session', 'PREWARM_FAILED');
+    }
+  },
+
+  /**
+   * Create a new session with initial transcript entries.
+   *
+   * This is useful for resuming a conversation or providing context.
+   *
+   * @param transcriptEntries - Initial transcript entries
+   * @param instructions - Optional system instructions
+   * @returns Promise resolving to a session ID
+   * @throws {FoundationModelsError} If creation fails
+   *
+   * @example
+   * ```typescript
+   * const sessionId = await FoundationModels.createSessionWithTranscript([
+   *   { type: 'prompt', content: 'What is React?' },
+   *   { type: 'response', content: 'React is a JavaScript library...' }
+   * ], 'You are a helpful programming assistant');
+   *
+   * // Continue the conversation
+   * const response = await FoundationModels.respond(sessionId, 'Tell me more');
+   * ```
+   */
+  async createSessionWithTranscript(
+    transcriptEntries: TranscriptEntry[],
+    instructions?: string
+  ): Promise<string> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!Array.isArray(transcriptEntries) || transcriptEntries.length === 0) {
+      throw new FoundationModelsError('Transcript entries must be a non-empty array', {
+        type: 'generationFailed',
+      });
+    }
+
+    try {
+      const options: CreateSessionWithTranscriptOptions = {
+        transcriptEntries,
+      };
+      if (instructions) {
+        options.instructions = instructions;
+      }
+      return await ExpoFoundationModelsModule.createSessionWithTranscript(options);
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to create session with transcript', 'SESSION_FAILED');
+    }
+  },
+
+  // MARK: - Adapter Methods
+
+  /**
+   * Load a custom adapter from Background Assets.
+   *
+   * Adapters specialize the system language model for custom use cases.
+   * Requires the `com.apple.developer.foundation-model-adapter` entitlement.
+   *
+   * @param name - Name of the adapter to load
+   * @param options - Optional loading options
+   * @returns Promise resolving to adapter info
+   * @throws {FoundationModelsError} If adapter not found or incompatible
+   *
+   * @example
+   * ```typescript
+   * const adapter = await FoundationModels.loadAdapter('myCustomAdapter');
+   * const sessionId = await FoundationModels.createSession({
+   *   adapterId: adapter.id
+   * });
+   * ```
+   */
+  async loadAdapter(name: string, options?: LoadAdapterOptions): Promise<AdapterInfo> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!name || typeof name !== 'string') {
+      throw new FoundationModelsError('Adapter name must be a non-empty string', {
+        type: 'generationFailed',
+      });
+    }
+
+    try {
+      return await ExpoFoundationModelsModule.loadAdapter(name, options ?? null);
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to load adapter', 'ADAPTER_LOAD_FAILED');
+    }
+  },
+
+  /**
+   * Load a custom adapter from a local file.
+   *
+   * @param filePath - Path to the .fmadapter file
+   * @param options - Optional loading options
+   * @returns Promise resolving to adapter info
+   * @throws {FoundationModelsError} If file not found or invalid
+   *
+   * @example
+   * ```typescript
+   * const adapter = await FoundationModels.loadAdapterFromFile(
+   *   '/path/to/my_adapter.fmadapter'
+   * );
+   * ```
+   */
+  async loadAdapterFromFile(filePath: string, options?: LoadAdapterOptions): Promise<AdapterInfo> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!filePath || typeof filePath !== 'string') {
+      throw new FoundationModelsError('File path must be a non-empty string', {
+        type: 'generationFailed',
+      });
+    }
+
+    try {
+      return await ExpoFoundationModelsModule.loadAdapterFromFile(filePath, options ?? null);
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to load adapter from file', 'ADAPTER_LOAD_FAILED');
+    }
+  },
+
+  /**
+   * Compile an adapter for faster inference.
+   *
+   * This prepares the adapter's draft model for optimized performance.
+   * Compilation can be computationally intensive but is cached for subsequent uses.
+   *
+   * @param adapterId - ID of the adapter to compile
+   * @throws {FoundationModelsError} If adapter not found
+   */
+  async compileAdapter(adapterId: string): Promise<void> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!adapterId || typeof adapterId !== 'string') {
+      throw new FoundationModelsError('Adapter ID must be a non-empty string', {
+        type: 'generationFailed',
+      });
+    }
+
+    try {
+      await ExpoFoundationModelsModule.compileAdapter(adapterId);
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to compile adapter', 'ADAPTER_COMPILE_FAILED');
+    }
+  },
+
+  /**
+   * Unload an adapter to free memory.
+   *
+   * @param adapterId - ID of the adapter to unload
+   * @throws {FoundationModelsError} If adapter not found
+   */
+  async unloadAdapter(adapterId: string): Promise<void> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!adapterId || typeof adapterId !== 'string') {
+      throw new FoundationModelsError('Adapter ID must be a non-empty string', {
+        type: 'generationFailed',
+      });
+    }
+
+    try {
+      await ExpoFoundationModelsModule.unloadAdapter(adapterId);
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to unload adapter', 'ADAPTER_UNLOAD_FAILED');
+    }
+  },
+
+  /**
+   * Get the download status of an adapter.
+   *
+   * @param name - Name of the adapter
+   * @returns Promise resolving to download status
+   */
+  async getAdapterDownloadStatus(name: string): Promise<AdapterDownloadStatus> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    try {
+      return await ExpoFoundationModelsModule.getAdapterDownloadStatus(name);
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to get adapter download status', 'ADAPTER_STATUS_FAILED');
+    }
+  },
+
+  /**
+   * Remove all obsolete adapters that are no longer compatible with the system model.
+   *
+   * Call this before downloading new adapters to ensure compatibility and manage storage.
+   */
+  async removeObsoleteAdapters(): Promise<void> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    try {
+      await ExpoFoundationModelsModule.removeObsoleteAdapters();
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to remove obsolete adapters', 'ADAPTER_REMOVE_FAILED');
+    }
+  },
+
+  /**
+   * Check if an adapter is compatible with the current system model.
+   *
+   * @param name - Name of the adapter to check
+   * @returns Promise resolving to true if compatible
+   */
+  async isAdapterCompatible(name: string): Promise<boolean> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    try {
+      return await ExpoFoundationModelsModule.isAdapterCompatible(name);
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to check adapter compatibility', 'ADAPTER_CHECK_FAILED');
     }
   },
 };

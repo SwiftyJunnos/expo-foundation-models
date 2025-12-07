@@ -289,6 +289,183 @@ export type ToolCallEvent = {
   toolCall: ToolCall;
 };
 
+// MARK: - Session Management Types
+
+/**
+ * Types of entries that can appear in a session transcript.
+ */
+export type TranscriptEntryType =
+  | 'instructions'
+  | 'prompt'
+  | 'response'
+  | 'toolCall'
+  | 'toolOutput';
+
+/**
+ * An entry in the session transcript.
+ */
+export type TranscriptEntry =
+  | { type: 'instructions'; content: string }
+  | { type: 'prompt'; content: string }
+  | { type: 'response'; content: string }
+  | { type: 'toolCall'; name: string; arguments: Record<string, unknown>; callId: string }
+  | { type: 'toolOutput'; content: string; callId: string };
+
+/**
+ * Options for prewarming a session.
+ */
+export type PrewarmOptions = {
+  /**
+   * A prompt prefix to cache for faster subsequent requests.
+   * This helps reduce latency when you know the beginning of your prompts.
+   */
+  promptPrefix?: string;
+};
+
+/**
+ * Options for creating a session with initial transcript.
+ */
+export type CreateSessionWithTranscriptOptions = {
+  /** Initial transcript entries to populate the session */
+  transcriptEntries: TranscriptEntry[];
+  /** Optional system instructions */
+  instructions?: string;
+};
+
+// MARK: - Guardrails & Model Configuration Types
+
+/**
+ * Guardrails mode for content safety.
+ *
+ * - `default`: Enforces safety by blocking unsafe content in prompts and responses
+ *   with a guardrailViolation error. Recommended for most applications.
+ *
+ * - `permissiveContentTransformations`: Allows the model to reason about sensitive
+ *   source material for transformation tasks (e.g., summarizing articles with
+ *   mature content, tagging chat conversations with profanity).
+ *   Note: This mode only works for generating string values. When using guided
+ *   generation (schemas), default guardrails are still applied.
+ *
+ * @example
+ * ```typescript
+ * // Default mode (recommended)
+ * const sessionId = await FoundationModels.createSession({
+ *   guardrails: 'default'
+ * });
+ *
+ * // Permissive mode for content transformation
+ * const sessionId = await FoundationModels.createSession({
+ *   guardrails: 'permissiveContentTransformations'
+ * });
+ * ```
+ */
+export type GuardrailsMode = 'default' | 'permissiveContentTransformations';
+
+/**
+ * Use case for the language model.
+ *
+ * - `general`: General-purpose prompting (default). Suitable for most text generation tasks.
+ *
+ * - `contentTagging`: Optimized for categorizing and organizing data with content tags.
+ *   Identifies topics, actions, objects, and emotions in input text.
+ *
+ * @example
+ * ```typescript
+ * // General use case (default)
+ * const sessionId = await FoundationModels.createSession({
+ *   useCase: 'general'
+ * });
+ *
+ * // Content tagging use case
+ * const sessionId = await FoundationModels.createSession({
+ *   useCase: 'contentTagging'
+ * });
+ * ```
+ */
+export type ModelUseCase = 'general' | 'contentTagging';
+
+/**
+ * Extended session options including guardrails and use case configuration.
+ *
+ * @example
+ * ```typescript
+ * const sessionId = await FoundationModels.createSession({
+ *   instructions: 'You are a helpful assistant',
+ *   guardrails: 'default',
+ *   useCase: 'general'
+ * });
+ * ```
+ */
+export type ExtendedSessionOptions = {
+  /** System instructions for the model */
+  instructions?: string;
+  /** Guardrails mode for content safety */
+  guardrails?: GuardrailsMode;
+  /** Use case for the model */
+  useCase?: ModelUseCase;
+  /** Tools available for the model to use */
+  tools?: Tool[];
+  /** Adapter ID to use for the session (from loadAdapter or loadAdapterFromFile) */
+  adapterId?: string;
+};
+
+// MARK: - Adapter Types
+
+/**
+ * Download status for an adapter.
+ */
+export type AdapterDownloadStatus =
+  | { state: 'notStarted' }
+  | { state: 'downloading'; progress: number }
+  | { state: 'paused' }
+  | { state: 'completed' }
+  | { state: 'failed'; error: string };
+
+/**
+ * Information about a loaded adapter.
+ *
+ * @example
+ * ```typescript
+ * const adapter = await FoundationModels.loadAdapter('myCustomAdapter');
+ * console.log('Adapter ID:', adapter.id);
+ * console.log('Metadata:', adapter.metadata);
+ * ```
+ */
+export type AdapterInfo = {
+  /** Unique identifier for this adapter instance */
+  id: string;
+  /** Name of the adapter */
+  name: string;
+  /** Whether the adapter is ready for use */
+  isReady: boolean;
+  /** Whether the adapter has been compiled for faster inference */
+  isCompiled: boolean;
+  /** Creator-defined metadata from the adapter */
+  metadata?: Record<string, unknown>;
+};
+
+/**
+ * Options for loading an adapter.
+ */
+export type LoadAdapterOptions = {
+  /**
+   * Whether to automatically compile the adapter after loading.
+   * Compilation improves inference speed but takes additional time.
+   * @default false
+   */
+  compile?: boolean;
+};
+
+/**
+ * Event emitted during adapter download progress.
+ */
+export type AdapterDownloadEvent = {
+  /** Name of the adapter being downloaded */
+  adapterName: string;
+  /** Current download status */
+  status: AdapterDownloadStatus;
+};
+
 /**
  * Events emitted by the ExpoFoundationModels module.
  */
@@ -296,4 +473,5 @@ export type ExpoFoundationModelsModuleEvents = {
   onToken: (event: TokenEvent) => void;
   onPartialSchema: (event: PartialSchemaEvent) => void;
   onToolCall: (event: ToolCallEvent) => void;
+  onAdapterDownload: (event: AdapterDownloadEvent) => void;
 };
