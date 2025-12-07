@@ -95,7 +95,7 @@ class FoundationModelsError extends Error {
 ## Phase 2: Structured Output / Guided Generation (High Priority)
 
 ### 2.1 JSON Schema-based Generation
-**Status:** 🔴 Not Started
+**Status:** ✅ Completed
 
 Generate structured data conforming to a JSON schema.
 
@@ -132,7 +132,7 @@ const person = await FoundationModels.respondWithSchema(
 ---
 
 ### 2.2 Enum/Choice Constraints
-**Status:** 🔴 Not Started
+**Status:** ✅ Completed
 
 Constrain generation to specific choices.
 
@@ -143,6 +143,20 @@ const result = await FoundationModels.respondWithChoices(
   ['positive', 'negative', 'neutral']
 );
 // Returns: "positive"
+```
+
+### 2.3 Streaming Structured Output
+**Status:** ✅ Completed
+
+Stream structured output with partial updates.
+
+```typescript
+const result = await FoundationModels.streamWithSchema(
+  sessionId,
+  "Generate a person profile",
+  personSchema,
+  (partial) => console.log('Partial:', partial)
+);
 ```
 
 ---

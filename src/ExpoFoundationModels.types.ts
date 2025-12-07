@@ -125,8 +125,80 @@ export type GenerationErrorInfo = {
 };
 
 /**
+ * JSON Schema type for structured output generation.
+ * Supports a subset of JSON Schema Draft 7 compatible with Apple's Foundation Models.
+ */
+export type JSONSchemaType = 'string' | 'number' | 'integer' | 'boolean' | 'object' | 'array';
+
+/**
+ * JSON Schema definition for structured output.
+ *
+ * @example
+ * ```typescript
+ * const personSchema: JSONSchema = {
+ *   type: 'object',
+ *   properties: {
+ *     name: { type: 'string', description: 'Full name' },
+ *     age: { type: 'integer' },
+ *     hobbies: {
+ *       type: 'array',
+ *       items: { type: 'string' }
+ *     }
+ *   },
+ *   required: ['name', 'age']
+ * };
+ * ```
+ */
+export type JSONSchema = {
+  /** The type of the schema */
+  type?: JSONSchemaType;
+
+  /** Description of the field (helps guide generation) */
+  description?: string;
+
+  /** For object types: property definitions */
+  properties?: { [key: string]: JSONSchema };
+
+  /** For object types: list of required property names */
+  required?: string[];
+
+  /** For array types: schema for array items */
+  items?: JSONSchema;
+
+  /** For string/number types: allowed values (enum constraint) */
+  enum?: (string | number)[];
+
+  /** Minimum value for number/integer types */
+  minimum?: number;
+
+  /** Maximum value for number/integer types */
+  maximum?: number;
+
+  /** Minimum length for string types */
+  minLength?: number;
+
+  /** Maximum length for string types */
+  maxLength?: number;
+
+  /** Minimum items for array types */
+  minItems?: number;
+
+  /** Maximum items for array types */
+  maxItems?: number;
+};
+
+/**
+ * Partial schema event emitted during streaming structured output.
+ */
+export type PartialSchemaEvent = {
+  sessionId: string;
+  partial: Record<string, unknown>;
+};
+
+/**
  * Events emitted by the ExpoFoundationModels module.
  */
 export type ExpoFoundationModelsModuleEvents = {
   onToken: (event: TokenEvent) => void;
+  onPartialSchema: (event: PartialSchemaEvent) => void;
 };

@@ -600,6 +600,258 @@ final class FoundationModelsManager: @unchecked Sendable {
         }
     }
     #endif
+
+    /// Generate structured output using a JSON schema
+    func respondWithSchemaAsync(
+        sessionId: String,
+        prompt: String,
+        schema: [String: Any],
+        options: FMGenerationOptions
+    ) async throws -> [String: Any] {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            var session: LanguageModelSession?
+            queue.sync {
+                session = self.sessions[sessionId] as? LanguageModelSession
+            }
+
+            guard let session = session else {
+                throw FoundationModelsManagerError.sessionNotFound
+            }
+
+            do {
+                // Convert JSON Schema dictionary to DynamicGenerationSchema
+                let dynamicSchema = try buildDynamicSchema(from: schema)
+                let generationSchema = try GenerationSchema(root: dynamicSchema, dependencies: [])
+                let nativeOptions = options.toNativeOptions()
+
+                let response = try await session.respond(
+                    to: prompt,
+                    schema: generationSchema,
+                    options: nativeOptions
+                )
+
+                // Decode the generated content to a dictionary
+                return try decodeGeneratedContent(response.content)
+            } catch let error as LanguageModelSession.GenerationError {
+                throw mapGenerationError(error)
+            } catch let error as FoundationModelsManagerError {
+                throw error
+            } catch {
+                throw FoundationModelsManagerError.generationFailed(error.localizedDescription)
+            }
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    /// Generate a response constrained to specific choices
+    func respondWithChoicesAsync(
+        sessionId: String,
+        prompt: String,
+        choices: [String],
+        options: FMGenerationOptions
+    ) async throws -> String {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            var session: LanguageModelSession?
+            queue.sync {
+                session = self.sessions[sessionId] as? LanguageModelSession
+            }
+
+            guard let session = session else {
+                throw FoundationModelsManagerError.sessionNotFound
+            }
+
+            do {
+                // Create an enum schema with the choices
+                let enumSchema = DynamicGenerationSchema(
+                    name: "Choice",
+                    anyOf: choices
+                )
+                let generationSchema = try GenerationSchema(root: enumSchema, dependencies: [])
+                let nativeOptions = options.toNativeOptions()
+
+                let response = try await session.respond(
+                    to: prompt,
+                    schema: generationSchema,
+                    options: nativeOptions
+                )
+
+                // The response should be one of the choices
+                return try decodeGeneratedString(response.content)
+            } catch let error as LanguageModelSession.GenerationError {
+                throw mapGenerationError(error)
+            } catch let error as FoundationModelsManagerError {
+                throw error
+            } catch {
+                throw FoundationModelsManagerError.generationFailed(error.localizedDescription)
+            }
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    /// Stream structured output with partial updates
+    func streamWithSchemaAsync(
+        sessionId: String,
+        prompt: String,
+        schema: [String: Any],
+        options: FMGenerationOptions,
+        onPartial: @escaping ([String: Any]) -> Void
+    ) async throws -> [String: Any] {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            var session: LanguageModelSession?
+            queue.sync {
+                session = self.sessions[sessionId] as? LanguageModelSession
+            }
+
+            guard let session = session else {
+                throw FoundationModelsManagerError.sessionNotFound
+            }
+
+            do {
+                let dynamicSchema = try buildDynamicSchema(from: schema)
+                let generationSchema = try GenerationSchema(root: dynamicSchema, dependencies: [])
+                let nativeOptions = options.toNativeOptions()
+
+                let stream = session.streamResponse(
+                    to: prompt,
+                    schema: generationSchema,
+                    options: nativeOptions
+                )
+
+                var finalResult: [String: Any] = [:]
+
+                for try await partialResponse in stream {
+                    if let partial = try? decodeGeneratedContent(partialResponse.content) {
+                        finalResult = partial
+                        onPartial(partial)
+                    }
+                }
+
+                return finalResult
+            } catch let error as LanguageModelSession.GenerationError {
+                throw mapGenerationError(error)
+            } catch let error as FoundationModelsManagerError {
+                throw error
+            } catch {
+                throw FoundationModelsManagerError.streamingFailed(error.localizedDescription)
+            }
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    // MARK: - Schema Helpers
+
+    #if canImport(FoundationModels)
+    @available(iOS 26.0, macOS 26.0, *)
+    private func buildDynamicSchema(from dict: [String: Any]) throws -> DynamicGenerationSchema {
+        guard let typeName = dict["type"] as? String else {
+            throw FoundationModelsManagerError.generationFailed("Schema must have a 'type' field")
+        }
+
+        let name = dict["name"] as? String ?? "Root"
+        let description = dict["description"] as? String
+
+        switch typeName {
+        case "object":
+            var properties: [DynamicGenerationSchema.Property] = []
+
+            if let props = dict["properties"] as? [String: [String: Any]] {
+                for (propName, propSchema) in props {
+                    let propDynamicSchema = try buildDynamicSchema(from: propSchema)
+                    let isRequired = (dict["required"] as? [String])?.contains(propName) ?? false
+                    properties.append(
+                        DynamicGenerationSchema.Property(
+                            name: propName,
+                            schema: propDynamicSchema,
+                            isRequired: isRequired
+                        )
+                    )
+                }
+            }
+
+            return DynamicGenerationSchema(
+                name: name,
+                description: description,
+                properties: properties
+            )
+
+        case "array":
+            if let itemsDict = dict["items"] as? [String: Any] {
+                let itemSchema = try buildDynamicSchema(from: itemsDict)
+                return DynamicGenerationSchema(
+                    name: name,
+                    description: description,
+                    arrayOf: itemSchema
+                )
+            }
+            throw FoundationModelsManagerError.generationFailed("Array schema must have 'items'")
+
+        case "string":
+            if let enumValues = dict["enum"] as? [String] {
+                return DynamicGenerationSchema(
+                    name: name,
+                    description: description,
+                    anyOf: enumValues
+                )
+            }
+            return DynamicGenerationSchema(
+                name: name,
+                description: description,
+                primitiveType: .string
+            )
+
+        case "integer":
+            return DynamicGenerationSchema(
+                name: name,
+                description: description,
+                primitiveType: .int
+            )
+
+        case "number":
+            return DynamicGenerationSchema(
+                name: name,
+                description: description,
+                primitiveType: .double
+            )
+
+        case "boolean":
+            return DynamicGenerationSchema(
+                name: name,
+                description: description,
+                primitiveType: .bool
+            )
+
+        default:
+            throw FoundationModelsManagerError.generationFailed("Unsupported schema type: \(typeName)")
+        }
+    }
+
+    @available(iOS 26.0, macOS 26.0, *)
+    private func decodeGeneratedContent(_ content: GeneratedContent) throws -> [String: Any] {
+        // GeneratedContent can be converted to JSON-compatible dictionary
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(content)
+        guard let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            throw FoundationModelsManagerError.generationFailed("Failed to decode generated content")
+        }
+        return dict
+    }
+
+    @available(iOS 26.0, macOS 26.0, *)
+    private func decodeGeneratedString(_ content: GeneratedContent) throws -> String {
+        let encoder = JSONEncoder()
+        let data = try encoder.encode(content)
+        if let str = String(data: data, encoding: .utf8)?.trimmingCharacters(in: CharacterSet(charactersIn: "\"")) {
+            return str
+        }
+        throw FoundationModelsManagerError.generationFailed("Failed to decode generated string")
+    }
+    #endif
 }
 
 // MARK: - Expo Module
@@ -608,7 +860,7 @@ public class ExpoFoundationModelsModule: Module {
     public func definition() -> ModuleDefinition {
         Name("ExpoFoundationModels")
 
-        Events("onToken")
+        Events("onToken", "onPartialSchema")
 
         // MARK: - CoreML Functions
 
@@ -668,6 +920,44 @@ public class ExpoFoundationModelsModule: Module {
                 onToken: { [weak self] token in
                     self?.sendEvent("onToken", [
                         "token": token,
+                        "sessionId": sessionId
+                    ])
+                }
+            )
+        }
+
+        // MARK: - Structured Output Functions
+
+        AsyncFunction("respondWithSchema") { (sessionId: String, prompt: String, schema: [String: Any], options: [String: Any]?) -> [String: Any] in
+            let genOptions = FMGenerationOptions.from(dictionary: options)
+            return try await FoundationModelsManager.shared.respondWithSchemaAsync(
+                sessionId: sessionId,
+                prompt: prompt,
+                schema: schema,
+                options: genOptions
+            )
+        }
+
+        AsyncFunction("respondWithChoices") { (sessionId: String, prompt: String, choices: [String], options: [String: Any]?) -> String in
+            let genOptions = FMGenerationOptions.from(dictionary: options)
+            return try await FoundationModelsManager.shared.respondWithChoicesAsync(
+                sessionId: sessionId,
+                prompt: prompt,
+                choices: choices,
+                options: genOptions
+            )
+        }
+
+        AsyncFunction("streamWithSchema") { (sessionId: String, prompt: String, schema: [String: Any], options: [String: Any]?) -> [String: Any] in
+            let genOptions = FMGenerationOptions.from(dictionary: options)
+            return try await FoundationModelsManager.shared.streamWithSchemaAsync(
+                sessionId: sessionId,
+                prompt: prompt,
+                schema: schema,
+                options: genOptions,
+                onPartial: { [weak self] partial in
+                    self?.sendEvent("onPartialSchema", [
+                        "partial": partial,
                         "sessionId": sessionId
                     ])
                 }

@@ -11,6 +11,9 @@ import type {
   UnavailableReason,
   GenerationErrorType,
   GenerationErrorInfo,
+  JSONSchema,
+  JSONSchemaType,
+  PartialSchemaEvent,
 } from './ExpoFoundationModels.types';
 
 export type {
@@ -24,6 +27,9 @@ export type {
   UnavailableReason,
   GenerationErrorType,
   GenerationErrorInfo,
+  JSONSchema,
+  JSONSchemaType,
+  PartialSchemaEvent,
 };
 
 /**
@@ -435,6 +441,210 @@ export const FoundationModels = {
       return result;
     } catch (error) {
       throw parseNativeError(error, 'Streaming failed', 'STREAMING_FAILED');
+    } finally {
+      subscription.remove();
+    }
+  },
+
+  /**
+   * Generate structured output conforming to a JSON schema.
+   *
+   * @param sessionId - The session ID
+   * @param prompt - The user prompt
+   * @param schema - JSON Schema defining the expected output structure
+   * @param options - Optional generation options
+   * @returns Promise resolving to an object matching the schema
+   * @throws {FoundationModelsError} If generation fails
+   *
+   * @example
+   * ```typescript
+   * const personSchema = {
+   *   type: 'object',
+   *   properties: {
+   *     name: { type: 'string' },
+   *     age: { type: 'integer' }
+   *   },
+   *   required: ['name', 'age']
+   * };
+   *
+   * const person = await FoundationModels.respondWithSchema(
+   *   sessionId,
+   *   'Generate a person profile',
+   *   personSchema
+   * );
+   * // Returns: { name: "John", age: 30 }
+   * ```
+   */
+  async respondWithSchema<T = Record<string, unknown>>(
+    sessionId: string,
+    prompt: string,
+    schema: JSONSchema,
+    options?: GenerationOptions
+  ): Promise<T> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!sessionId || typeof sessionId !== 'string') {
+      throw new FoundationModelsError('Session ID must be a non-empty string', {
+        type: 'sessionNotFound',
+      });
+    }
+
+    if (!prompt || typeof prompt !== 'string') {
+      throw new FoundationModelsError('Prompt must be a non-empty string', {
+        type: 'generationFailed',
+      });
+    }
+
+    if (!schema || typeof schema !== 'object') {
+      throw new FoundationModelsError('Schema must be a valid JSON Schema object', {
+        type: 'generationFailed',
+      });
+    }
+
+    try {
+      const result = await ExpoFoundationModelsModule.respondWithSchema(
+        sessionId,
+        prompt,
+        schema,
+        options ?? null
+      );
+      return result as T;
+    } catch (error) {
+      throw parseNativeError(error, 'Schema generation failed', 'SCHEMA_GENERATION_FAILED');
+    }
+  },
+
+  /**
+   * Generate a response constrained to one of the provided choices.
+   *
+   * @param sessionId - The session ID
+   * @param prompt - The user prompt
+   * @param choices - Array of allowed response values
+   * @param options - Optional generation options
+   * @returns Promise resolving to one of the choices
+   * @throws {FoundationModelsError} If generation fails
+   *
+   * @example
+   * ```typescript
+   * const sentiment = await FoundationModels.respondWithChoices(
+   *   sessionId,
+   *   'What is the sentiment of: "I love this!"',
+   *   ['positive', 'negative', 'neutral']
+   * );
+   * // Returns: "positive"
+   * ```
+   */
+  async respondWithChoices(
+    sessionId: string,
+    prompt: string,
+    choices: string[],
+    options?: GenerationOptions
+  ): Promise<string> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!sessionId || typeof sessionId !== 'string') {
+      throw new FoundationModelsError('Session ID must be a non-empty string', {
+        type: 'sessionNotFound',
+      });
+    }
+
+    if (!prompt || typeof prompt !== 'string') {
+      throw new FoundationModelsError('Prompt must be a non-empty string', {
+        type: 'generationFailed',
+      });
+    }
+
+    if (!Array.isArray(choices) || choices.length === 0) {
+      throw new FoundationModelsError('Choices must be a non-empty array', {
+        type: 'generationFailed',
+      });
+    }
+
+    try {
+      const result = await ExpoFoundationModelsModule.respondWithChoices(
+        sessionId,
+        prompt,
+        choices,
+        options ?? null
+      );
+      return result;
+    } catch (error) {
+      throw parseNativeError(error, 'Choice generation failed', 'CHOICE_GENERATION_FAILED');
+    }
+  },
+
+  /**
+   * Stream structured output with partial updates.
+   *
+   * @param sessionId - The session ID
+   * @param prompt - The user prompt
+   * @param schema - JSON Schema defining the expected output structure
+   * @param onPartial - Callback invoked with partial results as they're generated
+   * @param options - Optional generation options
+   * @returns Promise resolving to the complete object matching the schema
+   * @throws {FoundationModelsError} If streaming fails
+   */
+  async streamWithSchema<T = Record<string, unknown>>(
+    sessionId: string,
+    prompt: string,
+    schema: JSONSchema,
+    onPartial: (partial: Partial<T>) => void,
+    options?: GenerationOptions
+  ): Promise<T> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!sessionId || typeof sessionId !== 'string') {
+      throw new FoundationModelsError('Session ID must be a non-empty string', {
+        type: 'sessionNotFound',
+      });
+    }
+
+    if (!prompt || typeof prompt !== 'string') {
+      throw new FoundationModelsError('Prompt must be a non-empty string', {
+        type: 'streamingFailed',
+      });
+    }
+
+    if (!schema || typeof schema !== 'object') {
+      throw new FoundationModelsError('Schema must be a valid JSON Schema object', {
+        type: 'streamingFailed',
+      });
+    }
+
+    const subscription = ExpoFoundationModelsModule.addListener(
+      'onPartialSchema',
+      (event: PartialSchemaEvent) => {
+        if (event.sessionId === sessionId) {
+          onPartial(event.partial as Partial<T>);
+        }
+      }
+    );
+
+    try {
+      const result = await ExpoFoundationModelsModule.streamWithSchema(
+        sessionId,
+        prompt,
+        schema,
+        options ?? null
+      );
+      return result as T;
+    } catch (error) {
+      throw parseNativeError(error, 'Schema streaming failed', 'SCHEMA_STREAMING_FAILED');
     } finally {
       subscription.remove();
     }

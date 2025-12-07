@@ -14,7 +14,7 @@ class ExpoFoundationModelsModule : Module() {
     override fun definition() = ModuleDefinition {
         Name("ExpoFoundationModels")
 
-        Events("onToken")
+        Events("onToken", "onPartialSchema")
 
         // CoreML Functions (iOS only)
 
@@ -65,6 +65,20 @@ class ExpoFoundationModelsModule : Module() {
         }
 
         AsyncFunction("streamResponse") { sessionId: String, prompt: String, options: Map<String, Any>?, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        // Structured Output Functions (iOS only)
+
+        AsyncFunction("respondWithSchema") { sessionId: String, prompt: String, schema: Map<String, Any>, options: Map<String, Any>?, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("respondWithChoices") { sessionId: String, prompt: String, choices: List<String>, options: Map<String, Any>?, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("streamWithSchema") { sessionId: String, prompt: String, schema: Map<String, Any>, options: Map<String, Any>?, promise: Promise ->
             promise.reject(PlatformNotSupportedException())
         }
     }
