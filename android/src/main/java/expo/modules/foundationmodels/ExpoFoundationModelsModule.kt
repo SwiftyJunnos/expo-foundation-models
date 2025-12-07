@@ -44,6 +44,14 @@ class ExpoFoundationModelsModule : Module() {
             false
         }
 
+        Function("getAvailability") {
+            mapOf(
+                "available" to false,
+                "status" to "unavailable",
+                "reason" to "platformNotSupported"
+            )
+        }
+
         AsyncFunction("createSession") { instructions: String?, promise: Promise ->
             promise.reject(PlatformNotSupportedException())
         }

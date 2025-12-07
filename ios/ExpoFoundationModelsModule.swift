@@ -239,41 +239,166 @@ final class CoreMLManager: @unchecked Sendable {
 
 // MARK: - Foundation Models Manager
 
+/// Error types for Foundation Models operations
+enum FMErrorType: String {
+    case notAvailable = "notAvailable"
+    case sessionNotFound = "sessionNotFound"
+    case generationFailed = "generationFailed"
+    case streamingFailed = "streamingFailed"
+    case guardrailViolation = "guardrailViolation"
+    case refusal = "refusal"
+    case unsupportedLanguage = "unsupportedLanguage"
+    case unknown = "unknown"
+}
+
 /// Errors for Foundation Models operations
 struct FoundationModelsManagerError: Error, LocalizedError {
+    let type: FMErrorType
     let message: String
+    let refusalExplanation: String?
+    let context: String?
 
-    static let notAvailable = FoundationModelsManagerError(message: "Foundation Models is not available. Requires iOS 26+ with Apple Intelligence enabled in Settings.")
-    static let sessionNotFound = FoundationModelsManagerError(message: "Session not found")
+    init(type: FMErrorType, message: String, refusalExplanation: String? = nil, context: String? = nil) {
+        self.type = type
+        self.message = message
+        self.refusalExplanation = refusalExplanation
+        self.context = context
+    }
+
+    static let notAvailable = FoundationModelsManagerError(
+        type: .notAvailable,
+        message: "Foundation Models is not available. Requires iOS 26+ with Apple Intelligence enabled in Settings."
+    )
+
+    static let sessionNotFound = FoundationModelsManagerError(
+        type: .sessionNotFound,
+        message: "Session not found"
+    )
 
     static func generationFailed(_ reason: String) -> FoundationModelsManagerError {
-        return FoundationModelsManagerError(message: "Text generation failed: \(reason)")
+        return FoundationModelsManagerError(
+            type: .generationFailed,
+            message: "Text generation failed: \(reason)"
+        )
     }
 
     static func streamingFailed(_ reason: String) -> FoundationModelsManagerError {
-        return FoundationModelsManagerError(message: "Streaming failed: \(reason)")
+        return FoundationModelsManagerError(
+            type: .streamingFailed,
+            message: "Streaming failed: \(reason)"
+        )
+    }
+
+    static func guardrailViolation(_ context: String? = nil) -> FoundationModelsManagerError {
+        return FoundationModelsManagerError(
+            type: .guardrailViolation,
+            message: "Content was blocked by safety guardrails",
+            context: context
+        )
+    }
+
+    static func refusal(explanation: String?, context: String? = nil) -> FoundationModelsManagerError {
+        return FoundationModelsManagerError(
+            type: .refusal,
+            message: "The model refused to generate a response",
+            refusalExplanation: explanation,
+            context: context
+        )
+    }
+
+    static func unsupportedLanguage(_ language: String) -> FoundationModelsManagerError {
+        return FoundationModelsManagerError(
+            type: .unsupportedLanguage,
+            message: "Unsupported language or locale: \(language)"
+        )
     }
 
     var errorDescription: String? { message }
+
+    /// Convert to dictionary for JavaScript
+    func toDict() -> [String: Any] {
+        var dict: [String: Any] = [
+            "type": type.rawValue,
+            "message": message
+        ]
+        if let explanation = refusalExplanation {
+            dict["refusalExplanation"] = explanation
+        }
+        if let ctx = context {
+            dict["context"] = ctx
+        }
+        return dict
+    }
+}
+
+/// Sampling mode configuration
+enum FMSamplingMode {
+    case greedy
+    case topK(k: Int, seed: UInt64?)
+    case topP(threshold: Double, seed: UInt64?)
+
+    static func from(dictionary: [String: Any]?) -> FMSamplingMode? {
+        guard let dict = dictionary,
+              let type = dict["type"] as? String else {
+            return nil
+        }
+
+        switch type {
+        case "greedy":
+            return .greedy
+        case "topK":
+            guard let k = dict["k"] as? Int else { return nil }
+            let seed = dict["seed"] as? UInt64
+            return .topK(k: k, seed: seed)
+        case "topP":
+            guard let threshold = dict["probabilityThreshold"] as? Double else { return nil }
+            let seed = dict["seed"] as? UInt64
+            return .topP(threshold: threshold, seed: seed)
+        default:
+            return nil
+        }
+    }
 }
 
 /// Generation options for Foundation Models
 struct FMGenerationOptions {
-    var temperature: Double = 0.7
-    var maxTokens: Int = 1000
+    var temperature: Double?
+    var sampling: FMSamplingMode?
+    var maximumResponseTokens: Int?
 
     static func from(dictionary: [String: Any]?) -> FMGenerationOptions {
         var options = FMGenerationOptions()
         if let dict = dictionary {
-            if let temp = dict["temperature"] as? Double {
-                options.temperature = temp
-            }
-            if let tokens = dict["maxTokens"] as? Int {
-                options.maxTokens = tokens
-            }
+            options.temperature = dict["temperature"] as? Double
+            options.maximumResponseTokens = dict["maximumResponseTokens"] as? Int
+            options.sampling = FMSamplingMode.from(dictionary: dict["sampling"] as? [String: Any])
         }
         return options
     }
+
+    #if canImport(FoundationModels)
+    @available(iOS 26.0, macOS 26.0, *)
+    func toNativeOptions() -> GenerationOptions {
+        var samplingMode: GenerationOptions.SamplingMode?
+
+        if let sampling = self.sampling {
+            switch sampling {
+            case .greedy:
+                samplingMode = .greedy
+            case .topK(let k, let seed):
+                samplingMode = .random(top: k, seed: seed)
+            case .topP(let threshold, let seed):
+                samplingMode = .random(probabilityThreshold: threshold, seed: seed)
+            }
+        }
+
+        return GenerationOptions(
+            sampling: samplingMode,
+            temperature: temperature,
+            maximumResponseTokens: maximumResponseTokens
+        )
+    }
+    #endif
 }
 
 /// Manager for Apple's Foundation Models framework
@@ -294,6 +419,52 @@ final class FoundationModelsManager: @unchecked Sendable {
         }
         #endif
         return false
+    }
+
+    /// Get detailed availability information
+    func getAvailability() -> [String: Any] {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            let model = SystemLanguageModel.default
+            switch model.availability {
+            case .available:
+                return [
+                    "available": true,
+                    "status": "available"
+                ]
+            case .unavailable(.deviceNotEligible):
+                return [
+                    "available": false,
+                    "status": "unavailable",
+                    "reason": "deviceNotEligible"
+                ]
+            case .unavailable(.appleIntelligenceNotEnabled):
+                return [
+                    "available": false,
+                    "status": "unavailable",
+                    "reason": "appleIntelligenceNotEnabled"
+                ]
+            case .unavailable(.modelNotReady):
+                return [
+                    "available": false,
+                    "status": "unavailable",
+                    "reason": "modelNotReady"
+                ]
+            case .unavailable(let reason):
+                return [
+                    "available": false,
+                    "status": "unavailable",
+                    "reason": "unknown",
+                    "message": reason.localizedDescription
+                ]
+            }
+        }
+        #endif
+        return [
+            "available": false,
+            "status": "unavailable",
+            "reason": "platformNotSupported"
+        ]
     }
 
     /// Create a new session
@@ -352,8 +523,11 @@ final class FoundationModelsManager: @unchecked Sendable {
             }
 
             do {
-                let response = try await session.respond(to: prompt)
+                let nativeOptions = options.toNativeOptions()
+                let response = try await session.respond(to: prompt, options: nativeOptions)
                 return response.content
+            } catch let error as LanguageModelSession.GenerationError {
+                throw mapGenerationError(error)
             } catch {
                 throw FoundationModelsManagerError.generationFailed(error.localizedDescription)
             }
@@ -382,7 +556,8 @@ final class FoundationModelsManager: @unchecked Sendable {
 
             do {
                 var fullResponse = ""
-                let stream = session.streamResponse(to: prompt)
+                let nativeOptions = options.toNativeOptions()
+                let stream = session.streamResponse(to: prompt, options: nativeOptions)
 
                 for try await partialResponse in stream {
                     let newContent = partialResponse.content
@@ -394,6 +569,8 @@ final class FoundationModelsManager: @unchecked Sendable {
                 }
 
                 return fullResponse
+            } catch let error as LanguageModelSession.GenerationError {
+                throw mapGenerationError(error)
             } catch {
                 throw FoundationModelsManagerError.streamingFailed(error.localizedDescription)
             }
@@ -401,6 +578,28 @@ final class FoundationModelsManager: @unchecked Sendable {
         #endif
         throw FoundationModelsManagerError.notAvailable
     }
+
+    /// Map native GenerationError to our error type
+    #if canImport(FoundationModels)
+    @available(iOS 26.0, macOS 26.0, *)
+    private func mapGenerationError(_ error: LanguageModelSession.GenerationError) -> FoundationModelsManagerError {
+        switch error {
+        case .guardrailViolation(let context):
+            return .guardrailViolation(context.debugDescription)
+        case .refusal(let refusal, let context):
+            // Note: Getting explanation is async, so we can't easily include it here
+            // The explanation would need to be fetched separately if needed
+            return .refusal(explanation: nil, context: context.debugDescription)
+        case .unsupportedLanguageOrLocale(let context):
+            return .unsupportedLanguage(context.debugDescription)
+        @unknown default:
+            return FoundationModelsManagerError(
+                type: .unknown,
+                message: error.localizedDescription
+            )
+        }
+    }
+    #endif
 }
 
 // MARK: - Expo Module
@@ -437,6 +636,10 @@ public class ExpoFoundationModelsModule: Module {
 
         Function("isAvailable") { () -> Bool in
             return FoundationModelsManager.shared.isAvailable()
+        }
+
+        Function("getAvailability") { () -> [String: Any] in
+            return FoundationModelsManager.shared.getAvailability()
         }
 
         AsyncFunction("createSession") { (instructions: String?) -> String in

@@ -23,7 +23,7 @@ This document outlines the implementation status and roadmap for the `expo-found
 ## Phase 1: Core API Improvements (High Priority)
 
 ### 1.1 Detailed Availability Information
-**Status:** 🔴 Not Started
+**Status:** ✅ Completed
 
 Provide detailed reasons why Foundation Models may not be available.
 
@@ -45,39 +45,48 @@ FoundationModels.getAvailability(): {
 ---
 
 ### 1.2 GenerationOptions Support
-**Status:** 🔴 Not Started
+**Status:** ✅ Completed
 
-Actually apply generation options to the model.
+Generation options are now fully applied to the model.
 
 ```typescript
+type SamplingMode =
+  | { type: 'greedy' }
+  | { type: 'topK'; k: number; seed?: number }
+  | { type: 'topP'; probabilityThreshold: number; seed?: number };
+
 type GenerationOptions = {
-  temperature?: number;      // 0.0 - 2.0, controls randomness
-  topK?: number;             // Top-K sampling
-  topP?: number;             // Top-P (nucleus) sampling
-  maximumResponseTokens?: number;  // Max output tokens
+  temperature?: number;           // 0.0 - 2.0, controls randomness
+  sampling?: SamplingMode;        // Token sampling strategy
+  maximumResponseTokens?: number; // Max output tokens
 };
 ```
-
-**Note:** Need to verify which options are actually exposed by Apple's API in iOS 26.
 
 ---
 
 ### 1.3 Error Handling Improvements
-**Status:** 🔴 Not Started
+**Status:** ✅ Completed
 
-Provide structured error types matching Apple's error cases.
+Structured error types matching Apple's error cases are now implemented.
 
 ```typescript
 type GenerationErrorType = 
   | 'guardrailViolation'
   | 'refusal'
-  | 'cancelled'
+  | 'notAvailable'
   | 'sessionNotFound'
-  | 'notAvailable';
+  | 'generationFailed'
+  | 'streamingFailed'
+  | 'unsupportedLanguage'
+  | 'unknown';
 
 class FoundationModelsError extends Error {
   type: GenerationErrorType;
-  refusalExplanation?: string;  // For refusal errors
+  refusalExplanation?: string;
+  context?: string;
+  
+  isGuardrailViolation(): boolean;
+  isRefusal(): boolean;
 }
 ```
 

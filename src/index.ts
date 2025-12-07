@@ -1,8 +1,30 @@
 import { Platform } from 'react-native';
 import ExpoFoundationModelsModule from './ExpoFoundationModelsModule';
-import type { MLValue, MLDictionary, GenerationOptions, TokenEvent } from './ExpoFoundationModels.types';
+import type {
+  MLValue,
+  MLDictionary,
+  GenerationOptions,
+  SamplingMode,
+  TokenEvent,
+  Availability,
+  AvailabilityStatus,
+  UnavailableReason,
+  GenerationErrorType,
+  GenerationErrorInfo,
+} from './ExpoFoundationModels.types';
 
-export type { MLValue, MLDictionary, GenerationOptions, TokenEvent };
+export type {
+  MLValue,
+  MLDictionary,
+  GenerationOptions,
+  SamplingMode,
+  TokenEvent,
+  Availability,
+  AvailabilityStatus,
+  UnavailableReason,
+  GenerationErrorType,
+  GenerationErrorInfo,
+};
 
 /**
  * Error thrown when CoreML operations fail.
@@ -19,14 +41,73 @@ export class CoreMLError extends Error {
 
 /**
  * Error thrown when Foundation Models operations fail.
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   await FoundationModels.respond(sessionId, prompt);
+ * } catch (error) {
+ *   if (error instanceof FoundationModelsError) {
+ *     switch (error.type) {
+ *       case 'guardrailViolation':
+ *         console.log('Content blocked by safety filters');
+ *         break;
+ *       case 'refusal':
+ *         console.log('Model refused:', error.refusalExplanation);
+ *         break;
+ *     }
+ *   }
+ * }
+ * ```
  */
 export class FoundationModelsError extends Error {
+  /** The type of generation error */
+  public readonly type: GenerationErrorType;
+
+  /** For refusal errors, explanation of why the model refused */
+  public readonly refusalExplanation?: string;
+
+  /** Additional error context */
+  public readonly context?: string;
+
+  /** Legacy error code (for backward compatibility) */
+  public readonly code?: string;
+
   constructor(
     message: string,
-    public readonly code?: string
+    options?: {
+      type?: GenerationErrorType;
+      code?: string;
+      refusalExplanation?: string;
+      context?: string;
+    }
   ) {
     super(message);
     this.name = 'FoundationModelsError';
+    this.type = options?.type ?? 'unknown';
+    this.code = options?.code;
+    this.refusalExplanation = options?.refusalExplanation;
+    this.context = options?.context;
+  }
+
+  /** Check if this is a guardrail violation error */
+  isGuardrailViolation(): boolean {
+    return this.type === 'guardrailViolation';
+  }
+
+  /** Check if this is a refusal error */
+  isRefusal(): boolean {
+    return this.type === 'refusal';
+  }
+
+  /** Convert to a plain object for serialization */
+  toJSON(): GenerationErrorInfo {
+    return {
+      type: this.type,
+      message: this.message,
+      refusalExplanation: this.refusalExplanation,
+      context: this.context,
+    };
   }
 }
 
@@ -200,6 +281,43 @@ export const FoundationModels = {
   },
 
   /**
+   * Get detailed availability information for Foundation Models.
+   *
+   * This provides more context than `isAvailable()`, including the specific
+   * reason why Foundation Models may be unavailable.
+   *
+   * @returns Availability object with status and optional reason
+   *
+   * @example
+   * ```typescript
+   * const availability = FoundationModels.getAvailability();
+   * if (!availability.available) {
+   *   switch (availability.reason) {
+   *     case 'deviceNotEligible':
+   *       console.log('This device does not support Apple Intelligence');
+   *       break;
+   *     case 'appleIntelligenceNotEnabled':
+   *       console.log('Please enable Apple Intelligence in Settings');
+   *       break;
+   *     case 'modelNotReady':
+   *       console.log('Model is still downloading...');
+   *       break;
+   *   }
+   * }
+   * ```
+   */
+  getAvailability(): Availability {
+    if (Platform.OS !== 'ios') {
+      return {
+        available: false,
+        status: 'unavailable',
+        reason: 'platformNotSupported',
+      };
+    }
+    return ExpoFoundationModelsModule.getAvailability() as Availability;
+  },
+
+  /**
    * Create a new Foundation Models session.
    *
    * @param instructions - Optional system instructions for the LLM
@@ -208,19 +326,16 @@ export const FoundationModels = {
    */
   async createSession(instructions?: string): Promise<string> {
     if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError(
-        'Foundation Models is only available on iOS',
-        'PLATFORM_NOT_SUPPORTED'
-      );
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
     }
 
     try {
       return await ExpoFoundationModelsModule.createSession(instructions ?? null);
     } catch (error) {
-      throw new FoundationModelsError(
-        `Failed to create session: ${error instanceof Error ? error.message : String(error)}`,
-        'SESSION_FAILED'
-      );
+      throw parseNativeError(error, 'Failed to create session', 'SESSION_FAILED');
     }
   },
 
@@ -232,16 +347,15 @@ export const FoundationModels = {
    */
   async closeSession(sessionId: string): Promise<void> {
     if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string');
+      throw new FoundationModelsError('Session ID must be a non-empty string', {
+        type: 'sessionNotFound',
+      });
     }
 
     try {
       await ExpoFoundationModelsModule.closeSession(sessionId);
     } catch (error) {
-      throw new FoundationModelsError(
-        `Failed to close session: ${error instanceof Error ? error.message : String(error)}`,
-        'CLOSE_FAILED'
-      );
+      throw parseNativeError(error, 'Failed to close session', 'CLOSE_FAILED');
     }
   },
 
@@ -250,7 +364,7 @@ export const FoundationModels = {
    *
    * @param sessionId - The session ID
    * @param prompt - The user prompt
-   * @param options - Optional generation options (temperature, maxTokens)
+   * @param options - Optional generation options
    * @returns Promise resolving to the generated text
    * @throws {FoundationModelsError} If generation fails
    */
@@ -260,20 +374,21 @@ export const FoundationModels = {
     options?: GenerationOptions
   ): Promise<string> {
     if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string');
+      throw new FoundationModelsError('Session ID must be a non-empty string', {
+        type: 'sessionNotFound',
+      });
     }
 
     if (!prompt || typeof prompt !== 'string') {
-      throw new FoundationModelsError('Prompt must be a non-empty string');
+      throw new FoundationModelsError('Prompt must be a non-empty string', {
+        type: 'generationFailed',
+      });
     }
 
     try {
       return await ExpoFoundationModelsModule.respond(sessionId, prompt, options ?? null);
     } catch (error) {
-      throw new FoundationModelsError(
-        `Generation failed: ${error instanceof Error ? error.message : String(error)}`,
-        'GENERATION_FAILED'
-      );
+      throw parseNativeError(error, 'Generation failed', 'GENERATION_FAILED');
     }
   },
 
@@ -294,11 +409,15 @@ export const FoundationModels = {
     options?: GenerationOptions
   ): Promise<string> {
     if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string');
+      throw new FoundationModelsError('Session ID must be a non-empty string', {
+        type: 'sessionNotFound',
+      });
     }
 
     if (!prompt || typeof prompt !== 'string') {
-      throw new FoundationModelsError('Prompt must be a non-empty string');
+      throw new FoundationModelsError('Prompt must be a non-empty string', {
+        type: 'streamingFailed',
+      });
     }
 
     const subscription = ExpoFoundationModelsModule.addListener('onToken', (event: TokenEvent) => {
@@ -315,12 +434,69 @@ export const FoundationModels = {
       );
       return result;
     } catch (error) {
-      throw new FoundationModelsError(
-        `Streaming failed: ${error instanceof Error ? error.message : String(error)}`,
-        'STREAMING_FAILED'
-      );
+      throw parseNativeError(error, 'Streaming failed', 'STREAMING_FAILED');
     } finally {
       subscription.remove();
     }
   },
 };
+
+/**
+ * Parse native error and convert to FoundationModelsError with proper type.
+ */
+function parseNativeError(
+  error: unknown,
+  fallbackMessage: string,
+  fallbackCode: string
+): FoundationModelsError {
+  if (error instanceof Error) {
+    // Try to extract error type from native error message
+    const message = error.message;
+
+    // Check for known error patterns
+    if (message.includes('guardrail') || message.includes('safety')) {
+      return new FoundationModelsError(message, {
+        type: 'guardrailViolation',
+        code: 'GUARDRAIL_VIOLATION',
+      });
+    }
+
+    if (message.includes('refused') || message.includes('refusal')) {
+      return new FoundationModelsError(message, {
+        type: 'refusal',
+        code: 'REFUSAL',
+      });
+    }
+
+    if (message.includes('not available') || message.includes('notAvailable')) {
+      return new FoundationModelsError(message, {
+        type: 'notAvailable',
+        code: 'NOT_AVAILABLE',
+      });
+    }
+
+    if (message.includes('Session not found') || message.includes('sessionNotFound')) {
+      return new FoundationModelsError(message, {
+        type: 'sessionNotFound',
+        code: 'SESSION_NOT_FOUND',
+      });
+    }
+
+    if (message.includes('unsupported language') || message.includes('locale')) {
+      return new FoundationModelsError(message, {
+        type: 'unsupportedLanguage',
+        code: 'UNSUPPORTED_LANGUAGE',
+      });
+    }
+
+    return new FoundationModelsError(`${fallbackMessage}: ${message}`, {
+      type: 'generationFailed',
+      code: fallbackCode,
+    });
+  }
+
+  return new FoundationModelsError(`${fallbackMessage}: ${String(error)}`, {
+    type: 'unknown',
+    code: fallbackCode,
+  });
+}
