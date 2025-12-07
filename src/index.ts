@@ -78,6 +78,103 @@ export type {
   FeedbackResult,
 };
 
+// MARK: - Validation Helpers
+
+/**
+ * Assert that the current platform is iOS.
+ * @throws {CoreMLError} If not on iOS
+ */
+function assertIOSForCoreML(): void {
+  if (Platform.OS !== 'ios') {
+    throw new CoreMLError('CoreML is only available on iOS', 'PLATFORM_NOT_SUPPORTED');
+  }
+}
+
+/**
+ * Assert that the current platform is iOS for Foundation Models.
+ * @throws {FoundationModelsError} If not on iOS
+ */
+function assertIOSForFoundationModels(): void {
+  if (Platform.OS !== 'ios') {
+    throw new FoundationModelsError('Foundation Models is only available on iOS', {
+      type: 'notAvailable',
+      code: 'PLATFORM_NOT_SUPPORTED',
+    });
+  }
+}
+
+/**
+ * Assert that a value is a non-empty string.
+ * @throws {CoreMLError} If validation fails
+ */
+function assertNonEmptyStringForCoreML(value: unknown, name: string): asserts value is string {
+  if (!value || typeof value !== 'string') {
+    throw new CoreMLError(`${name} must be a non-empty string`);
+  }
+}
+
+/**
+ * Assert that a session ID is valid.
+ * @throws {FoundationModelsError} If validation fails
+ */
+function assertSessionId(sessionId: unknown): asserts sessionId is string {
+  if (!sessionId || typeof sessionId !== 'string') {
+    throw new FoundationModelsError('Session ID must be a non-empty string', {
+      type: 'sessionNotFound',
+    });
+  }
+}
+
+/**
+ * Assert that a prompt is valid.
+ * @throws {FoundationModelsError} If validation fails
+ */
+function assertPrompt(prompt: unknown, errorType: GenerationErrorType = 'generationFailed'): asserts prompt is string {
+  if (!prompt || typeof prompt !== 'string') {
+    throw new FoundationModelsError('Prompt must be a non-empty string', {
+      type: errorType,
+    });
+  }
+}
+
+/**
+ * Assert that a schema is valid.
+ * @throws {FoundationModelsError} If validation fails
+ */
+function assertSchema(schema: unknown, errorType: GenerationErrorType = 'generationFailed'): asserts schema is JSONSchema {
+  if (!schema || typeof schema !== 'object') {
+    throw new FoundationModelsError('Schema must be a valid JSON Schema object', {
+      type: errorType,
+    });
+  }
+}
+
+/**
+ * Assert that choices array is valid.
+ * @throws {FoundationModelsError} If validation fails
+ */
+function assertChoices(choices: unknown): asserts choices is string[] {
+  if (!Array.isArray(choices) || choices.length === 0) {
+    throw new FoundationModelsError('Choices must be a non-empty array', {
+      type: 'generationFailed',
+    });
+  }
+}
+
+/**
+ * Assert that a name/ID string is valid for Foundation Models.
+ * @throws {FoundationModelsError} If validation fails
+ */
+function assertNonEmptyString(value: unknown, name: string, errorType: GenerationErrorType = 'generationFailed'): asserts value is string {
+  if (!value || typeof value !== 'string') {
+    throw new FoundationModelsError(`${name} must be a non-empty string`, {
+      type: errorType,
+    });
+  }
+}
+
+// MARK: - Error Classes
+
 /**
  * Error thrown when CoreML operations fail.
  */
@@ -194,13 +291,8 @@ export const CoreML = {
    * @throws {CoreMLError} If model cannot be found or loaded
    */
   async loadModel(modelName: string): Promise<string> {
-    if (!modelName || typeof modelName !== 'string') {
-      throw new CoreMLError('Model name must be a non-empty string');
-    }
-
-    if (Platform.OS !== 'ios') {
-      throw new CoreMLError('CoreML is only available on iOS', 'PLATFORM_NOT_SUPPORTED');
-    }
+    assertNonEmptyStringForCoreML(modelName, 'Model name');
+    assertIOSForCoreML();
 
     try {
       return await ExpoFoundationModelsModule.loadModel(modelName);
@@ -219,13 +311,8 @@ export const CoreML = {
    * @throws {CoreMLError} If model is not loaded
    */
   async unloadModel(modelId: string): Promise<void> {
-    if (!modelId || typeof modelId !== 'string') {
-      throw new CoreMLError('Model ID must be a non-empty string');
-    }
-
-    if (Platform.OS !== 'ios') {
-      throw new CoreMLError('CoreML is only available on iOS', 'PLATFORM_NOT_SUPPORTED');
-    }
+    assertNonEmptyStringForCoreML(modelId, 'Model ID');
+    assertIOSForCoreML();
 
     try {
       await ExpoFoundationModelsModule.unloadModel(modelId);
@@ -246,17 +333,11 @@ export const CoreML = {
    * @throws {CoreMLError} If prediction fails
    */
   async predict(modelId: string, input: MLDictionary): Promise<MLDictionary> {
-    if (!modelId || typeof modelId !== 'string') {
-      throw new CoreMLError('Model ID must be a non-empty string');
-    }
-
+    assertNonEmptyStringForCoreML(modelId, 'Model ID');
     if (!input || typeof input !== 'object') {
       throw new CoreMLError('Input must be an object');
     }
-
-    if (Platform.OS !== 'ios') {
-      throw new CoreMLError('CoreML is only available on iOS', 'PLATFORM_NOT_SUPPORTED');
-    }
+    assertIOSForCoreML();
 
     try {
       const result = await ExpoFoundationModelsModule.predict(modelId, input);
@@ -395,12 +476,7 @@ export const FoundationModels = {
    * ```
    */
   async createSession(optionsOrInstructions?: string | ExtendedSessionOptions): Promise<string> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
+    assertIOSForFoundationModels();
 
     try {
       // Handle legacy string API
@@ -436,11 +512,7 @@ export const FoundationModels = {
    * @throws {FoundationModelsError} If session is not found
    */
   async closeSession(sessionId: string): Promise<void> {
-    if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string', {
-        type: 'sessionNotFound',
-      });
-    }
+    assertSessionId(sessionId);
 
     try {
       await ExpoFoundationModelsModule.closeSession(sessionId);
@@ -463,17 +535,8 @@ export const FoundationModels = {
     prompt: string,
     options?: GenerationOptions
   ): Promise<string> {
-    if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string', {
-        type: 'sessionNotFound',
-      });
-    }
-
-    if (!prompt || typeof prompt !== 'string') {
-      throw new FoundationModelsError('Prompt must be a non-empty string', {
-        type: 'generationFailed',
-      });
-    }
+    assertSessionId(sessionId);
+    assertPrompt(prompt);
 
     try {
       return await ExpoFoundationModelsModule.respond(sessionId, prompt, options ?? null);
@@ -498,17 +561,8 @@ export const FoundationModels = {
     onToken: (token: string) => void,
     options?: GenerationOptions
   ): Promise<string> {
-    if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string', {
-        type: 'sessionNotFound',
-      });
-    }
-
-    if (!prompt || typeof prompt !== 'string') {
-      throw new FoundationModelsError('Prompt must be a non-empty string', {
-        type: 'streamingFailed',
-      });
-    }
+    assertSessionId(sessionId);
+    assertPrompt(prompt, 'streamingFailed');
 
     const subscription = ExpoFoundationModelsModule.addListener('onToken', (event: TokenEvent) => {
       if (event.sessionId === sessionId) {
@@ -565,30 +619,10 @@ export const FoundationModels = {
     schema: JSONSchema,
     options?: GenerationOptions
   ): Promise<T> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
-
-    if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string', {
-        type: 'sessionNotFound',
-      });
-    }
-
-    if (!prompt || typeof prompt !== 'string') {
-      throw new FoundationModelsError('Prompt must be a non-empty string', {
-        type: 'generationFailed',
-      });
-    }
-
-    if (!schema || typeof schema !== 'object') {
-      throw new FoundationModelsError('Schema must be a valid JSON Schema object', {
-        type: 'generationFailed',
-      });
-    }
+    assertIOSForFoundationModels();
+    assertSessionId(sessionId);
+    assertPrompt(prompt);
+    assertSchema(schema);
 
     try {
       const result = await ExpoFoundationModelsModule.respondWithSchema(
@@ -629,30 +663,10 @@ export const FoundationModels = {
     choices: string[],
     options?: GenerationOptions
   ): Promise<string> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
-
-    if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string', {
-        type: 'sessionNotFound',
-      });
-    }
-
-    if (!prompt || typeof prompt !== 'string') {
-      throw new FoundationModelsError('Prompt must be a non-empty string', {
-        type: 'generationFailed',
-      });
-    }
-
-    if (!Array.isArray(choices) || choices.length === 0) {
-      throw new FoundationModelsError('Choices must be a non-empty array', {
-        type: 'generationFailed',
-      });
-    }
+    assertIOSForFoundationModels();
+    assertSessionId(sessionId);
+    assertPrompt(prompt);
+    assertChoices(choices);
 
     try {
       const result = await ExpoFoundationModelsModule.respondWithChoices(
@@ -685,30 +699,10 @@ export const FoundationModels = {
     onPartial: (partial: Partial<T>) => void,
     options?: GenerationOptions
   ): Promise<T> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
-
-    if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string', {
-        type: 'sessionNotFound',
-      });
-    }
-
-    if (!prompt || typeof prompt !== 'string') {
-      throw new FoundationModelsError('Prompt must be a non-empty string', {
-        type: 'streamingFailed',
-      });
-    }
-
-    if (!schema || typeof schema !== 'object') {
-      throw new FoundationModelsError('Schema must be a valid JSON Schema object', {
-        type: 'streamingFailed',
-      });
-    }
+    assertIOSForFoundationModels();
+    assertSessionId(sessionId);
+    assertPrompt(prompt, 'streamingFailed');
+    assertSchema(schema, 'streamingFailed');
 
     const subscription = ExpoFoundationModelsModule.addListener(
       'onPartialSchema',
@@ -760,12 +754,7 @@ export const FoundationModels = {
    * ```
    */
   async createSessionWithTools(options: SessionOptions): Promise<string> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
+    assertIOSForFoundationModels();
 
     if (!options.tools || options.tools.length === 0) {
       throw new FoundationModelsError('At least one tool must be provided', {
@@ -811,24 +800,9 @@ export const FoundationModels = {
     prompt: string,
     options?: GenerationOptions
   ): Promise<ToolResponse> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
-
-    if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string', {
-        type: 'sessionNotFound',
-      });
-    }
-
-    if (!prompt || typeof prompt !== 'string') {
-      throw new FoundationModelsError('Prompt must be a non-empty string', {
-        type: 'generationFailed',
-      });
-    }
+    assertIOSForFoundationModels();
+    assertSessionId(sessionId);
+    assertPrompt(prompt);
 
     try {
       return await ExpoFoundationModelsModule.respondWithTools(sessionId, prompt, options ?? null);
@@ -854,24 +828,9 @@ export const FoundationModels = {
    * ```
    */
   async submitToolResult(sessionId: string, toolResult: ToolResult): Promise<ToolResponse> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
-
-    if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string', {
-        type: 'sessionNotFound',
-      });
-    }
-
-    if (!toolResult.callId || typeof toolResult.callId !== 'string') {
-      throw new FoundationModelsError('Tool call ID must be a non-empty string', {
-        type: 'generationFailed',
-      });
-    }
+    assertIOSForFoundationModels();
+    assertSessionId(sessionId);
+    assertNonEmptyString(toolResult.callId, 'Tool call ID');
 
     try {
       return await ExpoFoundationModelsModule.submitToolResult(sessionId, toolResult);
@@ -896,24 +855,9 @@ export const FoundationModels = {
     callbacks: StreamWithToolsCallbacks,
     options?: GenerationOptions
   ): Promise<ToolResponse> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
-
-    if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string', {
-        type: 'sessionNotFound',
-      });
-    }
-
-    if (!prompt || typeof prompt !== 'string') {
-      throw new FoundationModelsError('Prompt must be a non-empty string', {
-        type: 'streamingFailed',
-      });
-    }
+    assertIOSForFoundationModels();
+    assertSessionId(sessionId);
+    assertPrompt(prompt, 'streamingFailed');
 
     const tokenSubscription = ExpoFoundationModelsModule.addListener(
       'onToken',
@@ -968,18 +912,8 @@ export const FoundationModels = {
    * ```
    */
   async getTranscript(sessionId: string): Promise<TranscriptEntry[]> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
-
-    if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string', {
-        type: 'sessionNotFound',
-      });
-    }
+    assertIOSForFoundationModels();
+    assertSessionId(sessionId);
 
     try {
       return await ExpoFoundationModelsModule.getTranscript(sessionId);
@@ -1006,18 +940,8 @@ export const FoundationModels = {
    * ```
    */
   async prewarm(sessionId: string, options?: PrewarmOptions): Promise<void> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
-
-    if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string', {
-        type: 'sessionNotFound',
-      });
-    }
+    assertIOSForFoundationModels();
+    assertSessionId(sessionId);
 
     try {
       await ExpoFoundationModelsModule.prewarm(sessionId, options ?? null);
@@ -1051,12 +975,7 @@ export const FoundationModels = {
     transcriptEntries: TranscriptEntry[],
     instructions?: string
   ): Promise<string> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
+    assertIOSForFoundationModels();
 
     if (!Array.isArray(transcriptEntries) || transcriptEntries.length === 0) {
       throw new FoundationModelsError('Transcript entries must be a non-empty array', {
@@ -1099,18 +1018,8 @@ export const FoundationModels = {
    * ```
    */
   async loadAdapter(name: string, options?: LoadAdapterOptions): Promise<AdapterInfo> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
-
-    if (!name || typeof name !== 'string') {
-      throw new FoundationModelsError('Adapter name must be a non-empty string', {
-        type: 'generationFailed',
-      });
-    }
+    assertIOSForFoundationModels();
+    assertNonEmptyString(name, 'Adapter name');
 
     try {
       return await ExpoFoundationModelsModule.loadAdapter(name, options ?? null);
@@ -1135,18 +1044,8 @@ export const FoundationModels = {
    * ```
    */
   async loadAdapterFromFile(filePath: string, options?: LoadAdapterOptions): Promise<AdapterInfo> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
-
-    if (!filePath || typeof filePath !== 'string') {
-      throw new FoundationModelsError('File path must be a non-empty string', {
-        type: 'generationFailed',
-      });
-    }
+    assertIOSForFoundationModels();
+    assertNonEmptyString(filePath, 'File path');
 
     try {
       return await ExpoFoundationModelsModule.loadAdapterFromFile(filePath, options ?? null);
@@ -1165,18 +1064,8 @@ export const FoundationModels = {
    * @throws {FoundationModelsError} If adapter not found
    */
   async compileAdapter(adapterId: string): Promise<void> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
-
-    if (!adapterId || typeof adapterId !== 'string') {
-      throw new FoundationModelsError('Adapter ID must be a non-empty string', {
-        type: 'generationFailed',
-      });
-    }
+    assertIOSForFoundationModels();
+    assertNonEmptyString(adapterId, 'Adapter ID');
 
     try {
       await ExpoFoundationModelsModule.compileAdapter(adapterId);
@@ -1192,18 +1081,8 @@ export const FoundationModels = {
    * @throws {FoundationModelsError} If adapter not found
    */
   async unloadAdapter(adapterId: string): Promise<void> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
-
-    if (!adapterId || typeof adapterId !== 'string') {
-      throw new FoundationModelsError('Adapter ID must be a non-empty string', {
-        type: 'generationFailed',
-      });
-    }
+    assertIOSForFoundationModels();
+    assertNonEmptyString(adapterId, 'Adapter ID');
 
     try {
       await ExpoFoundationModelsModule.unloadAdapter(adapterId);
@@ -1219,12 +1098,7 @@ export const FoundationModels = {
    * @returns Promise resolving to download status
    */
   async getAdapterDownloadStatus(name: string): Promise<AdapterDownloadStatus> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
+    assertIOSForFoundationModels();
 
     try {
       return await ExpoFoundationModelsModule.getAdapterDownloadStatus(name);
@@ -1239,12 +1113,7 @@ export const FoundationModels = {
    * Call this before downloading new adapters to ensure compatibility and manage storage.
    */
   async removeObsoleteAdapters(): Promise<void> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
+    assertIOSForFoundationModels();
 
     try {
       await ExpoFoundationModelsModule.removeObsoleteAdapters();
@@ -1260,12 +1129,7 @@ export const FoundationModels = {
    * @returns Promise resolving to true if compatible
    */
   async isAdapterCompatible(name: string): Promise<boolean> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
+    assertIOSForFoundationModels();
 
     try {
       return await ExpoFoundationModelsModule.isAdapterCompatible(name);
@@ -1307,18 +1171,8 @@ export const FoundationModels = {
    * ```
    */
   async logFeedback(sessionId: string, options: FeedbackOptions): Promise<FeedbackResult> {
-    if (Platform.OS !== 'ios') {
-      throw new FoundationModelsError('Foundation Models is only available on iOS', {
-        type: 'notAvailable',
-        code: 'PLATFORM_NOT_SUPPORTED',
-      });
-    }
-
-    if (!sessionId || typeof sessionId !== 'string') {
-      throw new FoundationModelsError('Session ID must be a non-empty string', {
-        type: 'sessionNotFound',
-      });
-    }
+    assertIOSForFoundationModels();
+    assertSessionId(sessionId);
 
     try {
       return await ExpoFoundationModelsModule.logFeedback(sessionId, options);
