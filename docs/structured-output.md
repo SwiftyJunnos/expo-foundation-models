@@ -2,6 +2,16 @@
 
 Generate JSON conforming to schemas or constrain output to specific choices.
 
+> **iOS 26 Beta Limitation**
+>
+> Dynamic JSON schemas passed from JavaScript are **not yet supported** in the current iOS 26 beta. The `DynamicGenerationSchema` API has changed and does not support runtime schema construction.
+>
+> **Current options:**
+> 1. Use `respond()` for plain text responses
+> 2. Define compile-time `Generable` types in Swift (requires native code)
+>
+> This limitation will be addressed when Apple stabilizes the Foundation Models API. The documentation below describes the intended API for when full support is available.
+
 ## JSON Schema Generation
 
 Generate structured data matching a JSON Schema.

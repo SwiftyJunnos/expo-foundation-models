@@ -2,6 +2,12 @@
 
 Let the model call functions you define to extend its capabilities.
 
+> **iOS 26 Beta Limitation**
+>
+> The tool calling API has changed in recent iOS 26 betas. Tool result submission (`submitToolResult`) is currently stubbed and may not function as expected. The model can still request tool calls, but submitting results back to continue the conversation is limited.
+>
+> This limitation will be addressed when Apple stabilizes the Foundation Models API.
+
 ## Overview
 
 Tool calling enables the model to:

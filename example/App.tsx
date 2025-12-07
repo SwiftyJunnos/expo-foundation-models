@@ -230,6 +230,9 @@ function StructuredDemo() {
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // Dynamic JSON schemas are not supported in current iOS 26 beta
+  const isDynamicSchemaSupported = false;
+
   const generatePerson = useCallback(async () => {
     if (!globalSessionId) {
       setError('Create a session first (Basic tab)');
@@ -304,9 +307,31 @@ function StructuredDemo() {
         Generate structured data conforming to a schema.
       </Text>
 
+      {/* Beta limitation notice */}
+      <View style={styles.betaNotice}>
+        <Text style={styles.betaNoticeTitle}>Beta Limitation</Text>
+        <Text style={styles.betaNoticeText}>
+          Dynamic JSON schemas from JavaScript are not yet supported in the iOS 26 beta.
+          Structured output requires compile-time Swift Generable types.
+        </Text>
+        <Text style={styles.betaNoticeHint}>
+          Use respond() for plain text responses, or define Generable types in Swift.
+        </Text>
+      </View>
+
       <View style={styles.buttonRow}>
-        <Button title="Generate Character" onPress={generatePerson} disabled={loading} />
-        <Button title="Classify Sentiment" onPress={classifySentiment} disabled={loading} color="#5856D6" />
+        <Button
+          title="Generate Character"
+          onPress={generatePerson}
+          disabled={loading || !isDynamicSchemaSupported}
+          color={isDynamicSchemaSupported ? '#007AFF' : '#C7C7CC'}
+        />
+        <Button
+          title="Classify Sentiment"
+          onPress={classifySentiment}
+          disabled={loading || !isDynamicSchemaSupported}
+          color={isDynamicSchemaSupported ? '#5856D6' : '#C7C7CC'}
+        />
       </View>
 
       {loading && <ActivityIndicator style={styles.loader} size="large" color="#007AFF" />}
@@ -1079,5 +1104,30 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: '#888',
     textAlign: 'center',
+  },
+  betaNotice: {
+    backgroundColor: '#FFF8E1',
+    padding: 16,
+    borderRadius: 8,
+    marginBottom: 16,
+    borderLeftWidth: 4,
+    borderLeftColor: '#FFA000',
+  },
+  betaNoticeTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#F57C00',
+    marginBottom: 8,
+  },
+  betaNoticeText: {
+    fontSize: 13,
+    color: '#5D4037',
+    marginBottom: 8,
+    lineHeight: 18,
+  },
+  betaNoticeHint: {
+    fontSize: 12,
+    color: '#795548',
+    fontStyle: 'italic',
   },
 });
