@@ -155,7 +155,7 @@ function BasicDemo() {
 // ============================================================================
 function StructuredDemo() {
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const generatePerson = useCallback(async () => {
@@ -592,7 +592,7 @@ function FeedbackDemo() {
 function CoreMLDemo() {
   const [modelId, setModelId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadModel = useCallback(async () => {
