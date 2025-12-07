@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, type ReactNode } from 'react';
 import {
   StyleSheet,
   View,
@@ -22,8 +22,80 @@ import {
 // Demo tabs
 type Tab = 'basic' | 'structured' | 'tools' | 'session' | 'feedback' | 'coreml';
 
-// Shared session state
+// Shared session state (using module-level variable for demo simplicity)
 let globalSessionId: string | null = null;
+
+// ============================================================================
+// Error Boundary - Catches rendering errors in child components
+// ============================================================================
+type ErrorBoundaryState = {
+  hasError: boolean;
+  error: Error | null;
+};
+
+class ErrorBoundary extends React.Component<
+  { children: ReactNode },
+  ErrorBoundaryState
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): ErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <View style={errorBoundaryStyles.container}>
+          <Text style={errorBoundaryStyles.title}>Something went wrong</Text>
+          <Text style={errorBoundaryStyles.text}>{this.state.error?.message}</Text>
+          <TouchableOpacity
+            style={errorBoundaryStyles.button}
+            onPress={() => this.setState({ hasError: false, error: null })}
+          >
+            <Text style={errorBoundaryStyles.buttonText}>Try Again</Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+const errorBoundaryStyles = StyleSheet.create({
+  container: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    backgroundColor: '#FFF3E0',
+  },
+  title: {
+    fontSize: 20,
+    fontWeight: '600',
+    color: '#E65100',
+    marginBottom: 12,
+  },
+  text: {
+    fontSize: 14,
+    color: '#F57C00',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  button: {
+    backgroundColor: '#FF9800',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+  },
+  buttonText: {
+    color: '#fff',
+    fontWeight: '600',
+  },
+});
 
 // ============================================================================
 // Basic Demo - Text generation and streaming
@@ -760,30 +832,34 @@ export default function App() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView contentContainerStyle={styles.content}>
-        <Text style={styles.title}>expo-foundation-models</Text>
-        <Text style={styles.version}>v1.0.0</Text>
+    <ErrorBoundary>
+      <SafeAreaView style={styles.container}>
+        <ScrollView contentContainerStyle={styles.content}>
+          <Text style={styles.title}>expo-foundation-models</Text>
+          <Text style={styles.version}>v1.0.0</Text>
 
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabScroll}>
-          <View style={styles.tabContainer}>
-            {tabs.map((tab) => (
-              <TouchableOpacity
-                key={tab.key}
-                style={[styles.tab, activeTab === tab.key && styles.tabActive]}
-                onPress={() => setActiveTab(tab.key)}
-              >
-                <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>
-                  {tab.label}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabScroll}>
+            <View style={styles.tabContainer}>
+              {tabs.map((tab) => (
+                <TouchableOpacity
+                  key={tab.key}
+                  style={[styles.tab, activeTab === tab.key && styles.tabActive]}
+                  onPress={() => setActiveTab(tab.key)}
+                >
+                  <Text style={[styles.tabText, activeTab === tab.key && styles.tabTextActive]}>
+                    {tab.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </ScrollView>
+
+          <ErrorBoundary>
+            {renderContent()}
+          </ErrorBoundary>
         </ScrollView>
-
-        {renderContent()}
-      </ScrollView>
-    </SafeAreaView>
+      </SafeAreaView>
+    </ErrorBoundary>
   );
 }
 
