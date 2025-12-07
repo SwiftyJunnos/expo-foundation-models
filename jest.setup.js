@@ -55,6 +55,9 @@ jest.mock('./src/ExpoFoundationModelsModule', () => ({
     removeObsoleteAdapters: jest.fn(),
     isAdapterCompatible: jest.fn(),
 
+    // Feedback functions
+    logFeedback: jest.fn(),
+
     // Event listener
     addListener: jest.fn(() => ({
       remove: jest.fn(),

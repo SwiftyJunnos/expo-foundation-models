@@ -149,5 +149,11 @@ class ExpoFoundationModelsModule : Module() {
         AsyncFunction("isAdapterCompatible") { name: String, promise: Promise ->
             promise.reject(PlatformNotSupportedException())
         }
+
+        // Feedback Functions (iOS only)
+
+        AsyncFunction("logFeedback") { sessionId: String, options: Map<String, Any>, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
     }
 }

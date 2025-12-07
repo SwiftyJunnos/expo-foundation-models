@@ -378,19 +378,36 @@ type AdapterInfo = {
 ## Phase 7: Feedback & Analytics (Low Priority)
 
 ### 7.1 Response Feedback
-**Status:** 🔴 Not Started
+**Status:** ✅ Completed
 
-Log feedback for model responses.
+Log feedback for model responses. Feedback can include sentiment, specific issues, and desired output. The feedback is serialized into an attachment that can be included in bug reports.
 
 ```typescript
+// Positive feedback
 await FoundationModels.logFeedback(sessionId, {
+  sentiment: 'positive'
+});
+
+// Negative feedback with details
+const result = await FoundationModels.logFeedback(sessionId, {
   sentiment: 'negative',
   issues: [
-    { category: 'incorrect', explanation: 'Outdated information' }
+    { category: 'incorrect', explanation: 'Outdated information' },
+    { category: 'tooVerbose' }
   ],
-  desiredOutput: 'The correct answer is...'
+  desiredResponse: 'The correct answer is...'
 });
+
+// The result contains a base64-encoded feedback attachment
+console.log(result.feedbackAttachment);
 ```
+
+**Implemented Features:**
+- `logFeedback(sessionId, options)` - Log feedback with sentiment and optional issues
+- Support for all issue categories: incorrect, didNotFollowInstructions, tooVerbose, unhelpful, stereotypeOrBias, suggestiveOrSexual, vulgarOrOffensive, triggeredGuardrailUnexpectedly
+- Optional explanation for each issue
+- Optional desired response text
+- Returns base64-encoded feedback attachment for bug reports
 
 ---
 
@@ -411,7 +428,7 @@ await FoundationModels.logFeedback(sessionId, {
 | 5.2 | Model Use Case | ✅ Done | Low | Low |
 | 6.1 | Adapter Loading | ✅ Done | High | Low |
 | 6.2 | Local Adapters | ✅ Done | Medium | Low |
-| 7.1 | Feedback Logging | 🟢 Low | Medium | Low |
+| 7.1 | Feedback Logging | ✅ Done | Medium | Low |
 
 ---
 
@@ -447,4 +464,5 @@ Contributions are welcome! Please check the issues for tasks marked as "help wan
 - **v0.5.0** - Phase 4: Session management (transcript access, prewarm, initial transcript)
 - **v0.6.0** - Phase 5: Advanced configuration (guardrails, use case, combined config)
 - **v0.7.0** - Phase 6: Adapters (load, compile, unload, compatibility checking)
+- **v0.8.0** - Phase 7: Feedback & Analytics (log feedback with sentiment, issues, desired response)
 - **v1.0.0** - (Planned) Full feature parity with Foundation Models framework

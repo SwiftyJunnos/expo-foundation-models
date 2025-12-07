@@ -466,6 +466,102 @@ export type AdapterDownloadEvent = {
   status: AdapterDownloadStatus;
 };
 
+// MARK: - Feedback Types
+
+/**
+ * Sentiment for model response feedback.
+ *
+ * - `positive`: The response was helpful and satisfactory
+ * - `neutral`: The response was neither particularly good nor bad
+ * - `negative`: The response was unsatisfactory or problematic
+ *
+ * @example
+ * ```typescript
+ * await FoundationModels.logFeedback(sessionId, {
+ *   sentiment: 'negative',
+ *   issues: [{ category: 'incorrect' }]
+ * });
+ * ```
+ */
+export type FeedbackSentiment = 'positive' | 'neutral' | 'negative';
+
+/**
+ * Categories of issues that can be reported in feedback.
+ *
+ * - `incorrect`: The response contained factual errors or wrong information
+ * - `didNotFollowInstructions`: The model didn't follow the given instructions
+ * - `tooVerbose`: The response was unnecessarily long or repetitive
+ * - `unhelpful`: The response didn't address the user's needs
+ * - `stereotypeOrBias`: The response exhibited stereotypes or bias
+ * - `suggestiveOrSexual`: The response contained suggestive or sexual content
+ * - `vulgarOrOffensive`: The response contained vulgar or offensive content
+ * - `triggeredGuardrailUnexpectedly`: The guardrail was triggered when it shouldn't have been
+ */
+export type FeedbackIssueCategory =
+  | 'incorrect'
+  | 'didNotFollowInstructions'
+  | 'tooVerbose'
+  | 'unhelpful'
+  | 'stereotypeOrBias'
+  | 'suggestiveOrSexual'
+  | 'vulgarOrOffensive'
+  | 'triggeredGuardrailUnexpectedly';
+
+/**
+ * An issue to report in feedback.
+ *
+ * @example
+ * ```typescript
+ * const issue: FeedbackIssue = {
+ *   category: 'incorrect',
+ *   explanation: 'The capital of France is Paris, not Lyon'
+ * };
+ * ```
+ */
+export type FeedbackIssue = {
+  /** The category of the issue */
+  category: FeedbackIssueCategory;
+  /** Optional explanation providing more context about the issue */
+  explanation?: string;
+};
+
+/**
+ * Options for logging feedback about a model response.
+ *
+ * @example
+ * ```typescript
+ * await FoundationModels.logFeedback(sessionId, {
+ *   sentiment: 'negative',
+ *   issues: [
+ *     { category: 'incorrect', explanation: 'Wrong date provided' },
+ *     { category: 'tooVerbose' }
+ *   ],
+ *   desiredResponse: 'The event happened on January 1, 2020'
+ * });
+ * ```
+ */
+export type FeedbackOptions = {
+  /** Overall sentiment about the response */
+  sentiment: FeedbackSentiment;
+  /** Specific issues with the response (optional) */
+  issues?: FeedbackIssue[];
+  /** What the response should have been (optional) */
+  desiredResponse?: string;
+};
+
+/**
+ * Result of logging feedback.
+ *
+ * The feedback attachment is a serialized data blob that can be included
+ * in bug reports or sent to Apple for model improvement.
+ */
+export type FeedbackResult = {
+  /** Whether the feedback was successfully logged */
+  success: boolean;
+  /** Base64-encoded feedback attachment data (can be included in bug reports) */
+  feedbackAttachment?: string;
+};
+
 /**
  * Events emitted by the ExpoFoundationModels module.
  */

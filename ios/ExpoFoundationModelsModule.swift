@@ -1532,6 +1532,94 @@ final class FoundationModelsManager: @unchecked Sendable {
         #endif
         throw FoundationModelsManagerError.notAvailable
     }
+
+    // MARK: - Feedback
+
+    /// Log feedback about a model response
+    func logFeedbackAsync(sessionId: String, options: [String: Any]) async throws -> [String: Any] {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            var session: LanguageModelSession?
+            queue.sync {
+                session = self.sessions[sessionId] as? LanguageModelSession
+            }
+
+            guard let session = session else {
+                throw FoundationModelsManagerError.sessionNotFound
+            }
+
+            // Parse sentiment
+            guard let sentimentString = options["sentiment"] as? String else {
+                throw FoundationModelsManagerError.generationFailed("Sentiment is required")
+            }
+
+            let sentiment: LanguageModelFeedback.Sentiment
+            switch sentimentString {
+            case "positive":
+                sentiment = .positive
+            case "neutral":
+                sentiment = .neutral
+            case "negative":
+                sentiment = .negative
+            default:
+                sentiment = .neutral
+            }
+
+            // Parse issues
+            var issues: [LanguageModelFeedback.Issue] = []
+            if let issueArray = options["issues"] as? [[String: Any]] {
+                for issueDict in issueArray {
+                    if let categoryString = issueDict["category"] as? String {
+                        let category: LanguageModelFeedback.Issue.Category
+                        switch categoryString {
+                        case "incorrect":
+                            category = .incorrect
+                        case "didNotFollowInstructions":
+                            category = .didNotFollowInstructions
+                        case "tooVerbose":
+                            category = .tooVerbose
+                        case "unhelpful":
+                            category = .unhelpful
+                        case "stereotypeOrBias":
+                            category = .stereotypeOrBias
+                        case "suggestiveOrSexual":
+                            category = .suggestiveOrSexual
+                        case "vulgarOrOffensive":
+                            category = .vulgarOrOffensive
+                        case "triggeredGuardrailUnexpectedly":
+                            category = .triggeredGuardrailUnexpectedly
+                        default:
+                            continue
+                        }
+
+                        let explanation = issueDict["explanation"] as? String
+                        let issue = LanguageModelFeedback.Issue(category: category, explanation: explanation)
+                        issues.append(issue)
+                    }
+                }
+            }
+
+            // Parse desired response
+            let desiredResponse = options["desiredResponse"] as? String
+
+            // Log the feedback and get the attachment data
+            let feedbackData = session.transcript.logFeedbackAttachment(
+                sentiment: sentiment,
+                issues: issues,
+                desiredResponseText: desiredResponse
+            )
+
+            // Convert data to base64 for transport to JS
+            let base64Attachment = feedbackData.base64EncodedString()
+
+            return [
+                "success": true,
+                "feedbackAttachment": base64Attachment
+            ]
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
 }
 
 // MARK: - Dynamic Tool
@@ -1763,6 +1851,12 @@ public class ExpoFoundationModelsModule: Module {
 
         AsyncFunction("isAdapterCompatible") { (name: String) -> Bool in
             return try await FoundationModelsManager.shared.isAdapterCompatibleAsync(name: name)
+        }
+
+        // MARK: - Feedback Functions
+
+        AsyncFunction("logFeedback") { (sessionId: String, options: [String: Any]) -> [String: Any] in
+            return try await FoundationModelsManager.shared.logFeedbackAsync(sessionId: sessionId, options: options)
         }
     }
 }

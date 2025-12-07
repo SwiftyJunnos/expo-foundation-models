@@ -32,6 +32,11 @@ import type {
   AdapterInfo,
   LoadAdapterOptions,
   AdapterDownloadEvent,
+  FeedbackSentiment,
+  FeedbackIssueCategory,
+  FeedbackIssue,
+  FeedbackOptions,
+  FeedbackResult,
 } from './ExpoFoundationModels.types';
 
 export type {
@@ -66,6 +71,11 @@ export type {
   AdapterInfo,
   LoadAdapterOptions,
   AdapterDownloadEvent,
+  FeedbackSentiment,
+  FeedbackIssueCategory,
+  FeedbackIssue,
+  FeedbackOptions,
+  FeedbackResult,
 };
 
 /**
@@ -1261,6 +1271,59 @@ export const FoundationModels = {
       return await ExpoFoundationModelsModule.isAdapterCompatible(name);
     } catch (error) {
       throw parseNativeError(error, 'Failed to check adapter compatibility', 'ADAPTER_CHECK_FAILED');
+    }
+  },
+
+  // MARK: - Feedback & Analytics
+
+  /**
+   * Log feedback about a model response.
+   *
+   * This allows users to provide feedback about the quality of model responses,
+   * which can be used for analytics and improvement. The feedback is serialized
+   * into an attachment that can be included in bug reports.
+   *
+   * @param sessionId - The session ID
+   * @param options - Feedback options including sentiment and optional issues
+   * @returns Promise resolving to feedback result with optional attachment
+   * @throws {FoundationModelsError} If session not found or feedback logging fails
+   *
+   * @example
+   * ```typescript
+   * // Positive feedback
+   * await FoundationModels.logFeedback(sessionId, {
+   *   sentiment: 'positive'
+   * });
+   *
+   * // Negative feedback with details
+   * await FoundationModels.logFeedback(sessionId, {
+   *   sentiment: 'negative',
+   *   issues: [
+   *     { category: 'incorrect', explanation: 'The date was wrong' },
+   *     { category: 'tooVerbose' }
+   *   ],
+   *   desiredResponse: 'The correct date is January 1, 2020'
+   * });
+   * ```
+   */
+  async logFeedback(sessionId: string, options: FeedbackOptions): Promise<FeedbackResult> {
+    if (Platform.OS !== 'ios') {
+      throw new FoundationModelsError('Foundation Models is only available on iOS', {
+        type: 'notAvailable',
+        code: 'PLATFORM_NOT_SUPPORTED',
+      });
+    }
+
+    if (!sessionId || typeof sessionId !== 'string') {
+      throw new FoundationModelsError('Session ID must be a non-empty string', {
+        type: 'sessionNotFound',
+      });
+    }
+
+    try {
+      return await ExpoFoundationModelsModule.logFeedback(sessionId, options);
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to log feedback', 'FEEDBACK_FAILED');
     }
   },
 };
