@@ -6,7 +6,7 @@ Let the model call functions you define to extend its capabilities.
 >
 > The tool calling API has changed in recent iOS 26 betas. Tool result submission (`submitToolResult`) is currently stubbed and may not function as expected. The model can still request tool calls, but submitting results back to continue the conversation is limited.
 >
-> This limitation will be addressed when Apple stabilizes the Foundation Models API.
+> See [GitHub Issue #1](https://github.com/mcp-foundation/expo-foundation-models/issues/1) for updates.
 
 ## Overview
 

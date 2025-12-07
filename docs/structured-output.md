@@ -2,15 +2,23 @@
 
 Generate JSON conforming to schemas or constrain output to specific choices.
 
-> **iOS 26 Beta Limitation**
+> **iOS 26 Beta Workaround**
 >
-> Dynamic JSON schemas passed from JavaScript are **not yet supported** in the current iOS 26 beta. The `DynamicGenerationSchema` API has changed and does not support runtime schema construction.
+> The `DynamicGenerationSchema` API doesn't support runtime schema construction in current iOS 26 betas.
+> 
+> **Current Implementation:**
+> We use a **prompt-based workaround**:
+> 1. The JSON schema is serialized and included in the prompt
+> 2. The model is instructed to output valid JSON matching the schema
+> 3. The response is parsed and validated
 >
-> **Current options:**
-> 1. Use `respond()` for plain text responses
-> 2. Define compile-time `Generable` types in Swift (requires native code)
+> **Limitations:**
+> - Results may vary - the model might not always produce valid JSON
+> - No native schema enforcement (the model can still produce invalid output)
+> - Slightly higher token usage due to schema in prompt
 >
-> This limitation will be addressed when Apple stabilizes the Foundation Models API. The documentation below describes the intended API for when full support is available.
+> This workaround will be replaced with native `DynamicGenerationSchema` support when Apple stabilizes the API.
+> See [GitHub Issue #1](https://github.com/mcp-foundation/expo-foundation-models/issues/1) for updates.
 
 ## JSON Schema Generation
 

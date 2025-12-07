@@ -230,9 +230,6 @@ function StructuredDemo() {
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Dynamic JSON schemas are not supported in current iOS 26 beta
-  const isDynamicSchemaSupported = false;
-
   const generatePerson = useCallback(async () => {
     if (!globalSessionId) {
       setError('Create a session first (Basic tab)');
@@ -307,15 +304,16 @@ function StructuredDemo() {
         Generate structured data conforming to a schema.
       </Text>
 
-      {/* Beta limitation notice */}
+      {/* Beta workaround notice */}
       <View style={styles.betaNotice}>
-        <Text style={styles.betaNoticeTitle}>Beta Limitation</Text>
+        <Text style={styles.betaNoticeTitle}>Prompt-Based Workaround</Text>
         <Text style={styles.betaNoticeText}>
-          Dynamic JSON schemas from JavaScript are not yet supported in the iOS 26 beta.
-          Structured output requires compile-time Swift Generable types.
+          iOS 26 beta doesn't support DynamicGenerationSchema at runtime.
+          We use a prompt-based approach: the schema is included in the prompt
+          and the model outputs JSON which is then parsed.
         </Text>
         <Text style={styles.betaNoticeHint}>
-          Use respond() for plain text responses, or define Generable types in Swift.
+          Results may vary - the model might not always produce valid JSON.
         </Text>
       </View>
 
@@ -323,14 +321,13 @@ function StructuredDemo() {
         <Button
           title="Generate Character"
           onPress={generatePerson}
-          disabled={loading || !isDynamicSchemaSupported}
-          color={isDynamicSchemaSupported ? '#007AFF' : '#C7C7CC'}
+          disabled={loading}
         />
         <Button
           title="Classify Sentiment"
           onPress={classifySentiment}
-          disabled={loading || !isDynamicSchemaSupported}
-          color={isDynamicSchemaSupported ? '#5856D6' : '#C7C7CC'}
+          disabled={loading}
+          color="#5856D6"
         />
       </View>
 

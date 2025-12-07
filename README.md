@@ -30,12 +30,12 @@ Expo module for Apple's **Foundation Models** (on-device LLM with Apple Intellig
 
 > **Note:** Foundation Models requires an Apple Silicon device with Apple Intelligence enabled in Settings.
 
-> **iOS 26 Beta Notice:** The Foundation Models framework is in beta with rapidly changing APIs. Some features are temporarily limited:
-> - **Structured Output**: Dynamic JSON schemas from JavaScript are not yet supported. Use `respond()` for plain text or define compile-time `Generable` types in Swift.
+> **iOS 26 Beta Notice:** The Foundation Models framework is in beta with rapidly changing APIs. Some features use workarounds:
+> - **Structured Output**: Uses prompt-based JSON generation instead of `DynamicGenerationSchema`. The schema is included in the prompt and the model's JSON response is parsed. Results may vary.
 > - **Tool Calling**: Tool result submission API has changed and is stubbed.
 > - **Session Transcript**: Some transcript features use workarounds for API compatibility.
 >
-> These limitations will be addressed as the API stabilizes.
+> See [GitHub Issue #1](https://github.com/mcp-foundation/expo-foundation-models/issues/1) for details.
 
 ## Installation
 

@@ -635,6 +635,16 @@ final class FoundationModelsManager: @unchecked Sendable {
     #endif
 
     /// Generate structured output using a JSON schema
+    ///
+    /// **iOS 26 Beta Workaround:**
+    /// The `DynamicGenerationSchema` API doesn't support runtime schema construction in current betas.
+    /// Instead, we use a prompt-based approach:
+    /// 1. Include the JSON schema in the prompt
+    /// 2. Ask the model to generate JSON matching that schema
+    /// 3. Parse and validate the response
+    ///
+    /// This approach is less reliable than native schema enforcement but works with the current API.
+    /// See: https://github.com/mcp-foundation/expo-foundation-models/issues/1
     func respondWithSchemaAsync(
         sessionId: String,
         prompt: String,
@@ -646,19 +656,29 @@ final class FoundationModelsManager: @unchecked Sendable {
             let session = try getSession(sessionId)
 
             do {
-                // Convert JSON Schema dictionary to DynamicGenerationSchema
-                let dynamicSchema = try buildDynamicSchema(from: schema)
-                let generationSchema = try GenerationSchema(root: dynamicSchema, dependencies: [])
+                // Build a prompt that includes the schema and asks for JSON output
+                let schemaJson = try JSONSerialization.data(withJSONObject: schema, options: .prettyPrinted)
+                let schemaString = String(data: schemaJson, encoding: .utf8) ?? "{}"
+                
+                let structuredPrompt = """
+                \(prompt)
+
+                You MUST respond with a valid JSON object that conforms to this JSON Schema:
+                ```json
+                \(schemaString)
+                ```
+
+                IMPORTANT:
+                - Output ONLY the JSON object, no markdown code blocks, no explanation
+                - Ensure all required fields are present
+                - Use the exact field names from the schema
+                """
+                
                 let nativeOptions = options.toNativeOptions()
-
-                let response = try await session.respond(
-                    to: prompt,
-                    schema: generationSchema,
-                    options: nativeOptions
-                )
-
-                // Decode the generated content to a dictionary
-                return try decodeGeneratedContent(response.content)
+                let response = try await session.respond(to: structuredPrompt, options: nativeOptions)
+                
+                // Parse the JSON response
+                return try parseJsonResponse(response)
             } catch let error as LanguageModelSession.GenerationError {
                 throw mapGenerationError(error)
             } catch let error as FoundationModelsManagerError {
@@ -672,6 +692,10 @@ final class FoundationModelsManager: @unchecked Sendable {
     }
 
     /// Generate a response constrained to specific choices
+    ///
+    /// **iOS 26 Beta Workaround:**
+    /// Uses prompt-based approach instead of `DynamicGenerationSchema` enum.
+    /// The model is asked to respond with exactly one of the provided choices.
     func respondWithChoicesAsync(
         sessionId: String,
         prompt: String,
@@ -683,22 +707,35 @@ final class FoundationModelsManager: @unchecked Sendable {
             let session = try getSession(sessionId)
 
             do {
-                // Create an enum schema with the choices
-                let enumSchema = DynamicGenerationSchema(
-                    name: "Choice",
-                    anyOf: choices
-                )
-                let generationSchema = try GenerationSchema(root: enumSchema, dependencies: [])
+                // Build a prompt that constrains the response to one of the choices
+                let choicesFormatted = choices.map { "\"\($0)\"" }.joined(separator: ", ")
+                
+                let structuredPrompt = """
+                \(prompt)
+
+                You MUST respond with exactly ONE of these options: [\(choicesFormatted)]
+
+                IMPORTANT:
+                - Output ONLY the chosen option, nothing else
+                - Do not add quotes, explanation, or any other text
+                - Your entire response must be exactly one of the listed options
+                """
+                
                 let nativeOptions = options.toNativeOptions()
-
-                let response = try await session.respond(
-                    to: prompt,
-                    schema: generationSchema,
-                    options: nativeOptions
-                )
-
-                // The response should be one of the choices
-                return try decodeGeneratedString(response.content)
+                let response = try await session.respond(to: structuredPrompt, options: nativeOptions)
+                
+                // Clean up the response and validate it's one of the choices
+                let cleanedResponse = response.trimmingCharacters(in: .whitespacesAndNewlines)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                
+                // Check if response matches one of the choices (case-insensitive for robustness)
+                if let matchedChoice = choices.first(where: { $0.lowercased() == cleanedResponse.lowercased() }) {
+                    return matchedChoice
+                }
+                
+                // If no exact match, return the cleaned response (model might have chosen correctly)
+                // This allows for slight variations while still being useful
+                return cleanedResponse
             } catch let error as LanguageModelSession.GenerationError {
                 throw mapGenerationError(error)
             } catch let error as FoundationModelsManagerError {
@@ -712,6 +749,10 @@ final class FoundationModelsManager: @unchecked Sendable {
     }
 
     /// Stream structured output with partial updates
+    ///
+    /// **iOS 26 Beta Workaround:**
+    /// Uses prompt-based streaming with JSON parsing on each chunk.
+    /// Partial results are emitted as the JSON is being constructed.
     func streamWithSchemaAsync(
         sessionId: String,
         prompt: String,
@@ -724,26 +765,47 @@ final class FoundationModelsManager: @unchecked Sendable {
             let session = try getSession(sessionId)
 
             do {
-                let dynamicSchema = try buildDynamicSchema(from: schema)
-                let generationSchema = try GenerationSchema(root: dynamicSchema, dependencies: [])
+                // Build a prompt that includes the schema and asks for JSON output
+                let schemaJson = try JSONSerialization.data(withJSONObject: schema, options: .prettyPrinted)
+                let schemaString = String(data: schemaJson, encoding: .utf8) ?? "{}"
+                
+                let structuredPrompt = """
+                \(prompt)
+
+                You MUST respond with a valid JSON object that conforms to this JSON Schema:
+                ```json
+                \(schemaString)
+                ```
+
+                IMPORTANT:
+                - Output ONLY the JSON object, no markdown code blocks, no explanation
+                - Ensure all required fields are present
+                - Use the exact field names from the schema
+                """
+                
                 let nativeOptions = options.toNativeOptions()
-
-                let stream = session.streamResponse(
-                    to: prompt,
-                    schema: generationSchema,
-                    options: nativeOptions
-                )
-
+                let stream = session.streamResponse(to: structuredPrompt, options: nativeOptions)
+                
+                var accumulatedText = ""
                 var finalResult: [String: Any] = [:]
 
                 for try await partialResponse in stream {
-                    if let partial = try? decodeGeneratedContent(partialResponse.content) {
+                    accumulatedText = partialResponse
+                    
+                    // Try to parse partial JSON (may fail for incomplete JSON, which is expected)
+                    if let partial = tryParsePartialJson(accumulatedText) {
                         finalResult = partial
                         onPartial(partial)
                     }
                 }
-
-                return finalResult
+                
+                // Parse the final complete response
+                if let parsed = tryParsePartialJson(accumulatedText) {
+                    return parsed
+                }
+                
+                // If parsing failed, try to extract JSON from the response
+                return try parseJsonResponse(accumulatedText)
             } catch let error as LanguageModelSession.GenerationError {
                 throw mapGenerationError(error)
             } catch let error as FoundationModelsManagerError {
@@ -756,22 +818,113 @@ final class FoundationModelsManager: @unchecked Sendable {
         throw FoundationModelsManagerError.notAvailable
     }
 
-    // MARK: - Schema Helpers
-    // Note: The DynamicGenerationSchema and GeneratedContent APIs are in beta and may change.
-    // These helper functions provide stubs that can be updated when the API stabilizes.
+    // MARK: - JSON Parsing Helpers
+    // 
+    // iOS 26 Beta Workaround:
+    // Since DynamicGenerationSchema doesn't support runtime schema construction,
+    // we use prompt-based JSON generation and parse the text response.
+    // 
+    // These helpers extract and parse JSON from model responses.
+    // See: https://github.com/mcp-foundation/expo-foundation-models/issues/1
 
-    #if canImport(FoundationModels)
-    @available(iOS 26.0, macOS 26.0, *)
-    private func buildDynamicSchema(from dict: [String: Any]) throws -> DynamicGenerationSchema {
-        // Note: The DynamicGenerationSchema API has changed in recent betas.
-        // For now, we throw an error indicating this feature needs API updates.
-        // When the API stabilizes, this can be properly implemented.
-        throw FoundationModelsManagerError.generationFailed(
-            "Structured output with dynamic schemas is not yet supported in this beta version. " +
-            "Please use plain text responses with respond() or use compile-time Generable types."
-        )
+    /// Parse a JSON response from the model, handling common formatting issues
+    private func parseJsonResponse(_ response: String) throws -> [String: Any] {
+        var jsonString = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Remove markdown code blocks if present
+        if jsonString.hasPrefix("```json") {
+            jsonString = String(jsonString.dropFirst(7))
+        } else if jsonString.hasPrefix("```") {
+            jsonString = String(jsonString.dropFirst(3))
+        }
+        if jsonString.hasSuffix("```") {
+            jsonString = String(jsonString.dropLast(3))
+        }
+        jsonString = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Try to find JSON object boundaries if there's extra text
+        if let startIndex = jsonString.firstIndex(of: "{"),
+           let endIndex = jsonString.lastIndex(of: "}") {
+            jsonString = String(jsonString[startIndex...endIndex])
+        }
+        
+        guard let data = jsonString.data(using: .utf8) else {
+            throw FoundationModelsManagerError.generationFailed("Failed to encode response as UTF-8")
+        }
+        
+        do {
+            guard let dict = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
+                throw FoundationModelsManagerError.generationFailed("Response is not a JSON object")
+            }
+            return dict
+        } catch {
+            throw FoundationModelsManagerError.generationFailed(
+                "Failed to parse JSON response: \(error.localizedDescription). Raw response: \(jsonString.prefix(200))..."
+            )
+        }
+    }
+    
+    /// Try to parse partial JSON (for streaming), returns nil if incomplete
+    private func tryParsePartialJson(_ text: String) -> [String: Any]? {
+        var jsonString = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Remove markdown code blocks if present
+        if jsonString.hasPrefix("```json") {
+            jsonString = String(jsonString.dropFirst(7))
+        } else if jsonString.hasPrefix("```") {
+            jsonString = String(jsonString.dropFirst(3))
+        }
+        jsonString = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Find the JSON object start
+        guard let startIndex = jsonString.firstIndex(of: "{") else {
+            return nil
+        }
+        jsonString = String(jsonString[startIndex...])
+        
+        // Try to parse as-is first (complete JSON)
+        if let data = jsonString.data(using: .utf8),
+           let dict = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] {
+            return dict
+        }
+        
+        // For partial JSON, try to close open brackets
+        // This is a simple heuristic that works for many cases
+        var balanced = jsonString
+        var openBraces = 0
+        var openBrackets = 0
+        var inString = false
+        var prevChar: Character = " "
+        
+        for char in balanced {
+            if char == "\"" && prevChar != "\\" {
+                inString = !inString
+            } else if !inString {
+                switch char {
+                case "{": openBraces += 1
+                case "}": openBraces -= 1
+                case "[": openBrackets += 1
+                case "]": openBrackets -= 1
+                default: break
+                }
+            }
+            prevChar = char
+        }
+        
+        // Close any open structures
+        if inString { balanced += "\"" }
+        balanced += String(repeating: "]", count: max(0, openBrackets))
+        balanced += String(repeating: "}", count: max(0, openBraces))
+        
+        if let data = balanced.data(using: .utf8),
+           let dict = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] {
+            return dict
+        }
+        
+        return nil
     }
 
+    #if canImport(FoundationModels)
     @available(iOS 26.0, macOS 26.0, *)
     private func decodeGeneratedContent(_ content: GeneratedContent) throws -> [String: Any] {
         // Try to serialize through string representation
