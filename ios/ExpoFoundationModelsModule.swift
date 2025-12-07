@@ -8,25 +8,31 @@ import ExpoModulesCore
 // MARK: - CoreML Manager
 
 /// Errors that can occur during CoreML operations
-enum CoreMLManagerError: Error {
-    case modelNotFound
-    case modelLoadFailed
-    case modelNotLoaded
-    case predictionFailed
-    case invalidInput
+enum CoreMLManagerError: Error, LocalizedError {
+    case modelNotFound(name: String)
+    case modelLoadFailed(name: String, underlying: Error?)
+    case modelNotLoaded(id: String)
+    case predictionFailed(id: String, underlying: Error?)
+    case invalidInput(reason: String)
 
-    var localizedDescription: String {
+    var errorDescription: String? {
         switch self {
-        case .modelNotFound:
-            return "Model not found in app bundle"
-        case .modelLoadFailed:
-            return "Failed to load CoreML model"
-        case .modelNotLoaded:
-            return "Model is not loaded"
-        case .predictionFailed:
-            return "Prediction failed"
-        case .invalidInput:
-            return "Invalid input provided"
+        case .modelNotFound(let name):
+            return "Model '\(name)' not found in app bundle"
+        case .modelLoadFailed(let name, let underlying):
+            if let err = underlying {
+                return "Failed to load CoreML model '\(name)': \(err.localizedDescription)"
+            }
+            return "Failed to load CoreML model '\(name)'"
+        case .modelNotLoaded(let id):
+            return "Model with ID '\(id)' is not loaded"
+        case .predictionFailed(let id, let underlying):
+            if let err = underlying {
+                return "Prediction failed for model '\(id)': \(err.localizedDescription)"
+            }
+            return "Prediction failed for model '\(id)'"
+        case .invalidInput(let reason):
+            return "Invalid input: \(reason)"
         }
     }
 }
@@ -87,7 +93,7 @@ final class CoreMLManager: @unchecked Sendable {
     func loadModelAsync(modelName: String) async throws -> String {
         // Find the model URL in the main bundle
         guard let modelURL = Bundle.main.url(forResource: modelName, withExtension: "mlmodelc") else {
-            throw CoreMLManagerError.modelNotFound
+            throw CoreMLManagerError.modelNotFound(name: modelName)
         }
 
         do {
@@ -105,7 +111,7 @@ final class CoreMLManager: @unchecked Sendable {
 
             return modelId
         } catch {
-            throw CoreMLManagerError.modelLoadFailed
+            throw CoreMLManagerError.modelLoadFailed(name: modelName, underlying: error)
         }
     }
 
@@ -117,7 +123,7 @@ final class CoreMLManager: @unchecked Sendable {
         }
 
         guard found else {
-            throw CoreMLManagerError.modelNotLoaded
+            throw CoreMLManagerError.modelNotLoaded(id: modelId)
         }
 
         queue.async(flags: .barrier) {
@@ -134,7 +140,7 @@ final class CoreMLManager: @unchecked Sendable {
         }
 
         guard let mlModel = model else {
-            throw CoreMLManagerError.modelNotLoaded
+            throw CoreMLManagerError.modelNotLoaded(id: modelId)
         }
 
         let featureProvider = DictionaryFeatureProvider(dictionary: input)
@@ -143,7 +149,7 @@ final class CoreMLManager: @unchecked Sendable {
             let prediction = try mlModel.prediction(from: featureProvider)
             return convertPredictionToDict(prediction)
         } catch {
-            throw CoreMLManagerError.predictionFailed
+            throw CoreMLManagerError.predictionFailed(id: modelId, underlying: error)
         }
     }
 
@@ -413,6 +419,39 @@ final class FoundationModelsManager: @unchecked Sendable {
 
     private init() {}
 
+    // MARK: - Helper Methods
+
+    #if canImport(FoundationModels)
+    /// Get a session by ID, throwing if not found
+    @available(iOS 26.0, macOS 26.0, *)
+    private func getSession(_ sessionId: String) throws -> LanguageModelSession {
+        var session: LanguageModelSession?
+        queue.sync {
+            session = sessions[sessionId] as? LanguageModelSession
+        }
+        guard let session = session else {
+            throw FoundationModelsManagerError.sessionNotFound
+        }
+        return session
+    }
+
+    /// Get an adapter by ID, throwing if not found
+    @available(iOS 26.0, macOS 26.0, *)
+    private func getAdapter(_ adapterId: String) throws -> SystemLanguageModel.Adapter {
+        var adapter: SystemLanguageModel.Adapter?
+        queue.sync {
+            adapter = adapters[adapterId] as? SystemLanguageModel.Adapter
+        }
+        guard let adapter = adapter else {
+            throw FoundationModelsManagerError(
+                type: .generationFailed,
+                message: "Adapter not found: \(adapterId)"
+            )
+        }
+        return adapter
+    }
+    #endif
+
     /// Check if Foundation Models is available
     func isAvailable() -> Bool {
         #if canImport(FoundationModels)
@@ -515,14 +554,7 @@ final class FoundationModelsManager: @unchecked Sendable {
     func respondAsync(sessionId: String, prompt: String, options: FMGenerationOptions) async throws -> String {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
-            var session: LanguageModelSession?
-            queue.sync {
-                session = self.sessions[sessionId] as? LanguageModelSession
-            }
-
-            guard let session = session else {
-                throw FoundationModelsManagerError.sessionNotFound
-            }
+            let session = try getSession(sessionId)
 
             do {
                 let nativeOptions = options.toNativeOptions()
@@ -547,14 +579,7 @@ final class FoundationModelsManager: @unchecked Sendable {
     ) async throws -> String {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
-            var session: LanguageModelSession?
-            queue.sync {
-                session = self.sessions[sessionId] as? LanguageModelSession
-            }
-
-            guard let session = session else {
-                throw FoundationModelsManagerError.sessionNotFound
-            }
+            let session = try getSession(sessionId)
 
             do {
                 var fullResponse = ""
@@ -612,14 +637,7 @@ final class FoundationModelsManager: @unchecked Sendable {
     ) async throws -> [String: Any] {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
-            var session: LanguageModelSession?
-            queue.sync {
-                session = self.sessions[sessionId] as? LanguageModelSession
-            }
-
-            guard let session = session else {
-                throw FoundationModelsManagerError.sessionNotFound
-            }
+            let session = try getSession(sessionId)
 
             do {
                 // Convert JSON Schema dictionary to DynamicGenerationSchema
@@ -656,14 +674,7 @@ final class FoundationModelsManager: @unchecked Sendable {
     ) async throws -> String {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
-            var session: LanguageModelSession?
-            queue.sync {
-                session = self.sessions[sessionId] as? LanguageModelSession
-            }
-
-            guard let session = session else {
-                throw FoundationModelsManagerError.sessionNotFound
-            }
+            let session = try getSession(sessionId)
 
             do {
                 // Create an enum schema with the choices
@@ -704,14 +715,7 @@ final class FoundationModelsManager: @unchecked Sendable {
     ) async throws -> [String: Any] {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
-            var session: LanguageModelSession?
-            queue.sync {
-                session = self.sessions[sessionId] as? LanguageModelSession
-            }
-
-            guard let session = session else {
-                throw FoundationModelsManagerError.sessionNotFound
-            }
+            let session = try getSession(sessionId)
 
             do {
                 let dynamicSchema = try buildDynamicSchema(from: schema)
@@ -908,14 +912,7 @@ final class FoundationModelsManager: @unchecked Sendable {
     ) async throws -> [String: Any] {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
-            var session: LanguageModelSession?
-            queue.sync {
-                session = self.sessions[sessionId] as? LanguageModelSession
-            }
-
-            guard let session = session else {
-                throw FoundationModelsManagerError.sessionNotFound
-            }
+            let session = try getSession(sessionId)
 
             do {
                 let nativeOptions = options.toNativeOptions()
@@ -960,14 +957,7 @@ final class FoundationModelsManager: @unchecked Sendable {
     ) async throws -> [String: Any] {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
-            var session: LanguageModelSession?
-            queue.sync {
-                session = self.sessions[sessionId] as? LanguageModelSession
-            }
-
-            guard let session = session else {
-                throw FoundationModelsManagerError.sessionNotFound
-            }
+            let session = try getSession(sessionId)
 
             guard let callIdString = toolResult["callId"] as? String,
                   let callId = UUID(uuidString: callIdString) else {
@@ -1032,14 +1022,7 @@ final class FoundationModelsManager: @unchecked Sendable {
     ) async throws -> [String: Any] {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
-            var session: LanguageModelSession?
-            queue.sync {
-                session = self.sessions[sessionId] as? LanguageModelSession
-            }
-
-            guard let session = session else {
-                throw FoundationModelsManagerError.sessionNotFound
-            }
+            let session = try getSession(sessionId)
 
             do {
                 var fullResponse = ""
@@ -1111,14 +1094,7 @@ final class FoundationModelsManager: @unchecked Sendable {
     func getTranscriptAsync(sessionId: String) async throws -> [[String: Any]] {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
-            var session: LanguageModelSession?
-            queue.sync {
-                session = self.sessions[sessionId] as? LanguageModelSession
-            }
-
-            guard let session = session else {
-                throw FoundationModelsManagerError.sessionNotFound
-            }
+            let session = try getSession(sessionId)
 
             var entries: [[String: Any]] = []
 
@@ -1168,14 +1144,7 @@ final class FoundationModelsManager: @unchecked Sendable {
     func prewarmAsync(sessionId: String, options: [String: Any]?) async throws {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
-            var session: LanguageModelSession?
-            queue.sync {
-                session = self.sessions[sessionId] as? LanguageModelSession
-            }
-
-            guard let session = session else {
-                throw FoundationModelsManagerError.sessionNotFound
-            }
+            let session = try getSession(sessionId)
 
             // Extract prompt prefix if provided
             let promptPrefix = options?["promptPrefix"] as? String
@@ -1315,17 +1284,7 @@ final class FoundationModelsManager: @unchecked Sendable {
             // Create the model - with adapter if provided, otherwise with useCase/guardrails
             let model: SystemLanguageModel
             if let adapterId = options["adapterId"] as? String {
-                // Get the adapter from storage
-                var adapter: SystemLanguageModel.Adapter?
-                queue.sync {
-                    adapter = self.adapters[adapterId] as? SystemLanguageModel.Adapter
-                }
-                guard let loadedAdapter = adapter else {
-                    throw FoundationModelsManagerError(
-                        type: .generationFailed,
-                        message: "Adapter not found: \(adapterId)"
-                    )
-                }
+                let loadedAdapter = try getAdapter(adapterId)
                 model = SystemLanguageModel(adapter: loadedAdapter, guardrails: guardrails)
             } else {
                 model = SystemLanguageModel(useCase: useCase, guardrails: guardrails)
@@ -1452,17 +1411,10 @@ final class FoundationModelsManager: @unchecked Sendable {
     func compileAdapterAsync(adapterId: String) async throws {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
-            var adapter: SystemLanguageModel.Adapter?
-            queue.sync {
-                adapter = self.adapters[adapterId] as? SystemLanguageModel.Adapter
-            }
-
-            guard let loadedAdapter = adapter else {
-                throw FoundationModelsManagerError.generationFailed("Adapter not found: \(adapterId)")
-            }
+            let adapter = try getAdapter(adapterId)
 
             do {
-                try await loadedAdapter.compile()
+                try await adapter.compile()
             } catch {
                 throw FoundationModelsManagerError.generationFailed("Failed to compile adapter: \(error.localizedDescription)")
             }
@@ -1539,14 +1491,7 @@ final class FoundationModelsManager: @unchecked Sendable {
     func logFeedbackAsync(sessionId: String, options: [String: Any]) async throws -> [String: Any] {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
-            var session: LanguageModelSession?
-            queue.sync {
-                session = self.sessions[sessionId] as? LanguageModelSession
-            }
-
-            guard let session = session else {
-                throw FoundationModelsManagerError.sessionNotFound
-            }
+            let session = try getSession(sessionId)
 
             // Parse sentiment
             guard let sentimentString = options["sentiment"] as? String else {
