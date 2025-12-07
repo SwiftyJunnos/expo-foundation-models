@@ -677,8 +677,8 @@ final class FoundationModelsManager: @unchecked Sendable {
                 let nativeOptions = options.toNativeOptions()
                 let response = try await session.respond(to: structuredPrompt, options: nativeOptions)
                 
-                // Parse the JSON response
-                return try parseJsonResponse(response)
+                // Parse the JSON response - access .content from Response<String>
+                return try parseJsonResponse(response.content)
             } catch let error as LanguageModelSession.GenerationError {
                 throw mapGenerationError(error)
             } catch let error as FoundationModelsManagerError {
@@ -725,7 +725,8 @@ final class FoundationModelsManager: @unchecked Sendable {
                 let response = try await session.respond(to: structuredPrompt, options: nativeOptions)
                 
                 // Clean up the response and validate it's one of the choices
-                let cleanedResponse = response.trimmingCharacters(in: .whitespacesAndNewlines)
+                // Access .content from Response<String>
+                let cleanedResponse = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
                     .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
                 
                 // Check if response matches one of the choices (case-insensitive for robustness)
@@ -790,7 +791,8 @@ final class FoundationModelsManager: @unchecked Sendable {
                 var finalResult: [String: Any] = [:]
 
                 for try await partialResponse in stream {
-                    accumulatedText = partialResponse
+                    // Access .content from the stream snapshot
+                    accumulatedText = partialResponse.content
                     
                     // Try to parse partial JSON (may fail for incomplete JSON, which is expected)
                     if let partial = tryParsePartialJson(accumulatedText) {
@@ -1366,8 +1368,11 @@ final class FoundationModelsManager: @unchecked Sendable {
                     try await adapter.compile()
                 }
 
-                queue.async(flags: .barrier) {
-                    self.adapters[adapterId] = adapter
+                // Store adapter - use nonisolated(unsafe) for the capture since Adapter isn't Sendable
+                // but we're only storing it, not mutating across threads
+                let adapterToStore = adapter
+                queue.async(flags: .barrier) { [adapterToStore] in
+                    self.adapters[adapterId] = adapterToStore
                 }
 
                 return [
@@ -1402,8 +1407,11 @@ final class FoundationModelsManager: @unchecked Sendable {
                     try await adapter.compile()
                 }
 
-                queue.async(flags: .barrier) {
-                    self.adapters[adapterId] = adapter
+                // Store adapter - use nonisolated(unsafe) for the capture since Adapter isn't Sendable
+                // but we're only storing it, not mutating across threads
+                let adapterToStore = adapter
+                queue.async(flags: .barrier) { [adapterToStore] in
+                    self.adapters[adapterId] = adapterToStore
                 }
 
                 return [
@@ -1549,7 +1557,9 @@ final class FoundationModelsManager: @unchecked Sendable {
 
 #if canImport(FoundationModels)
 @available(iOS 26.0, macOS 26.0, *)
-private struct DynamicTool: Tool {
+private struct DynamicTool: Tool, @unchecked Sendable {
+    // Note: @unchecked Sendable is used because [String: Any] contains Any which is not Sendable.
+    // This is safe in our use case as the parametersDict is only read, never mutated after init.
     let name: String
     let description: String
     let parametersDict: [String: Any]?
