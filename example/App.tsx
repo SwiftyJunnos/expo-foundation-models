@@ -11,8 +11,6 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native';
 import {
-  CoreML,
-  CoreMLError,
   FoundationModels,
   FoundationModelsError,
   type TranscriptEntry,
@@ -20,7 +18,7 @@ import {
 } from 'expo-foundation-models';
 
 // Demo tabs
-type Tab = 'basic' | 'structured' | 'tools' | 'session' | 'feedback' | 'coreml';
+type Tab = 'basic' | 'structured' | 'tools' | 'session' | 'feedback';
 
 // ============================================================================
 // Tool Implementations - Real API calls for tool demo
@@ -823,82 +821,6 @@ function FeedbackDemo() {
 }
 
 // ============================================================================
-// CoreML Demo
-// ============================================================================
-function CoreMLDemo() {
-  const [modelId, setModelId] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<Record<string, unknown> | null>(null);
-  const [error, setError] = useState<string | null>(null);
-
-  const loadModel = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const id = await CoreML.loadModel('ExampleClassifier');
-      setModelId(id);
-    } catch (err) {
-      setError(err instanceof CoreMLError ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const runPrediction = useCallback(async () => {
-    if (!modelId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const prediction = await CoreML.predict(modelId, {
-        input: [1.0, 2.0, 3.0, 4.0],
-      });
-      setResult(prediction);
-    } catch (err) {
-      setError(err instanceof CoreMLError ? err.message : String(err));
-    } finally {
-      setLoading(false);
-    }
-  }, [modelId]);
-
-  const unloadModel = useCallback(async () => {
-    if (!modelId) return;
-    try {
-      await CoreML.unloadModel(modelId);
-      setModelId(null);
-      setResult(null);
-    } catch (err) {
-      setError(err instanceof CoreMLError ? err.message : String(err));
-    }
-  }, [modelId]);
-
-  return (
-    <>
-      <Text style={styles.sectionTitle}>CoreML</Text>
-      <Text style={styles.description}>
-        Load and run CoreML models from your app bundle.
-      </Text>
-
-      <StatusBadge label="Model" active={!!modelId} />
-
-      <View style={styles.buttonRow}>
-        {!modelId ? (
-          <Button title="Load Model" onPress={loadModel} disabled={loading} />
-        ) : (
-          <>
-            <Button title="Predict" onPress={runPrediction} disabled={loading} />
-            <Button title="Unload" onPress={unloadModel} disabled={loading} color="#FF3B30" />
-          </>
-        )}
-      </View>
-
-      {loading && <ActivityIndicator style={styles.loader} size="large" color="#007AFF" />}
-      {error && <ErrorBox message={error} />}
-      {result && <ResultBox title="Prediction" content={JSON.stringify(result, null, 2)} />}
-    </>
-  );
-}
-
-// ============================================================================
 // Shared Components
 // ============================================================================
 function Button({ title, onPress, disabled, color = '#007AFF' }: {
@@ -961,11 +883,10 @@ export default function App() {
     { key: 'tools', label: 'Tools' },
     { key: 'session', label: 'Session' },
     { key: 'feedback', label: 'Feedback' },
-    { key: 'coreml', label: 'CoreML' },
   ];
 
   const renderContent = () => {
-    if (!isAvailable && activeTab !== 'coreml') {
+    if (!isAvailable) {
       return (
         <View style={styles.unavailableBox}>
           <Text style={styles.unavailableTitle}>Foundation Models Unavailable</Text>
@@ -990,8 +911,6 @@ export default function App() {
         return <SessionDemo />;
       case 'feedback':
         return <FeedbackDemo />;
-      case 'coreml':
-        return <CoreMLDemo />;
     }
   };
 
