@@ -2,9 +2,18 @@
 
 Let the model call functions you define to extend its capabilities.
 
-> **iOS 26 Beta Limitation**
+> **iOS 26 Beta Workaround**
 >
-> The tool calling API has changed in recent iOS 26 betas. Tool result submission (`submitToolResult`) is currently stubbed and may not function as expected. The model can still request tool calls, but submitting results back to continue the conversation is limited.
+> The native Tool API requires compile-time `@Generable` argument types, which can't be created dynamically from JavaScript. We use a **prompt-based workaround**:
+>
+> 1. Tool definitions are included in the prompt to the model
+> 2. The model responds with a JSON tool call if needed
+> 3. Tool results are submitted by continuing the conversation
+>
+> **Limitations:**
+> - Model may not always format tool calls correctly
+> - No native tool call validation
+> - Slightly higher token usage due to tool definitions in prompt
 >
 > See [GitHub Issue #1](https://github.com/mcp-foundation/expo-foundation-models/issues/1) for updates.
 

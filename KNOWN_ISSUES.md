@@ -64,25 +64,54 @@ This workaround will be replaced with native `DynamicGenerationSchema` support w
 
 ---
 
-## Issue #2: Tool Result Submission API Changed
+## Issue #2: Tool Calling API Requires Compile-Time Types
 
-**Status:** Stubbed (not functional)  
-**Affected APIs:** `submitToolResult()`  
+**Status:** Workaround implemented  
+**Affected APIs:** `createSessionWithTools()`, `respondWithTools()`, `submitToolResult()`  
 **iOS Version:** iOS 26 beta (as of December 2024)
 
 ### Problem
 
-The tool result submission API has changed in recent betas. The previous pattern of submitting tool results back to the session no longer works as expected.
+The native Foundation Models Tool API requires compile-time `@Generable` argument types. These Swift types must be defined at compile time, making it impossible to create dynamic tool definitions from JavaScript.
 
-### Current State
+### Workaround
 
-- Tool definitions and tool call requests work
-- Submitting results back to continue the conversation is stubbed
-- The function returns a placeholder response
+We use a **prompt-based approach**:
+
+1. Tool definitions are stored separately when creating a session
+2. When responding, tool definitions are included in the prompt
+3. The model is instructed to respond with a JSON tool call if needed
+4. The response is parsed to detect tool calls
+5. Tool results are submitted by continuing the conversation with the result
+
+```swift
+let structuredPrompt = """
+You have access to the following tools:
+
+Tool: getWeather
+Description: Get current weather for a city
+Parameters:
+  - city (string): City name
+  - unit (string): Temperature unit
+
+User request: \(prompt)
+
+If you need to use a tool, respond with ONLY:
+{"tool_call": {"name": "toolName", "arguments": {...}}}
+"""
+```
+
+### Limitations
+
+- Model may not always format tool calls correctly
+- No native tool call validation
+- Slightly higher token usage due to tool definitions in prompt
 
 ### Code References
 
-- Swift implementation: `ios/ExpoFoundationModelsModule.swift` (search for `submitToolResult`)
+- Session creation: `ios/ExpoFoundationModelsModule.swift:951-991`
+- Prompt building: `ios/ExpoFoundationModelsModule.swift` (search for `buildToolsPrompt`)
+- Response parsing: `ios/ExpoFoundationModelsModule.swift` (search for `parseToolCallResponse`)
 
 ---
 

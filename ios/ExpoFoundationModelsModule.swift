@@ -415,6 +415,8 @@ final class FoundationModelsManager: @unchecked Sendable {
     private var sessions: [String: Any] = [:]
     // Store loaded adapters
     private var adapters: [String: Any] = [:]
+    // Store tool definitions for each session (for prompt-based tool calling workaround)
+    private var sessionTools: [String: [[String: Any]]] = [:]
     private let queue = DispatchQueue(label: "expo.modules.foundationmodels.fm", attributes: .concurrent)
 
     private init() {}
@@ -948,6 +950,10 @@ final class FoundationModelsManager: @unchecked Sendable {
     // MARK: - Tool Calling
 
     /// Create a session with tools
+    ///
+    /// **iOS 26 Beta Workaround:**
+    /// The native Tool API requires compile-time @Generable argument types.
+    /// We store tool definitions separately and use prompt-based tool calling.
     func createSessionWithToolsAsync(options: [String: Any]) async throws -> String {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
@@ -957,31 +963,25 @@ final class FoundationModelsManager: @unchecked Sendable {
                 throw FoundationModelsManagerError.generationFailed("At least one tool must be provided")
             }
 
-            // Convert tool dictionaries to native Tool types
-            var tools: [any Tool] = []
-            for toolDict in toolDicts {
-                let tool = try buildDynamicTool(from: toolDict)
-                tools.append(tool)
-            }
-
             let instructions = options["instructions"] as? String
 
+            // Create a regular session (without native tools, we'll use prompt-based approach)
             let session: LanguageModelSession
             if let instructions = instructions, !instructions.isEmpty {
                 session = LanguageModelSession(
                     model: SystemLanguageModel.default,
-                    tools: tools,
                     instructions: instructions
                 )
             } else {
                 session = LanguageModelSession(
-                    model: SystemLanguageModel.default,
-                    tools: tools
+                    model: SystemLanguageModel.default
                 )
             }
 
             queue.async(flags: .barrier) {
                 self.sessions[sessionId] = session
+                // Store tool definitions for prompt-based tool calling
+                self.sessionTools[sessionId] = toolDicts
             }
 
             return sessionId
@@ -991,6 +991,15 @@ final class FoundationModelsManager: @unchecked Sendable {
     }
 
     /// Send a prompt and get response (text or tool call)
+    ///
+    /// **iOS 26 Beta Workaround:**
+    /// The native Tool API requires compile-time @Generable argument types, which can't be
+    /// created dynamically from JavaScript. Instead, we use a prompt-based approach:
+    /// 1. Include tool definitions in the prompt
+    /// 2. Ask the model to respond with a JSON tool call if appropriate
+    /// 3. Parse the response to detect tool calls
+    ///
+    /// See: https://github.com/mcp-foundation/expo-foundation-models/issues/1
     func respondWithToolsAsync(
         sessionId: String,
         prompt: String,
@@ -1001,14 +1010,33 @@ final class FoundationModelsManager: @unchecked Sendable {
             let session = try getSession(sessionId)
 
             do {
-                let nativeOptions = options.toNativeOptions()
-                let response = try await session.respond(to: prompt, options: nativeOptions)
+                // Get the tools from the session's configuration
+                // We need to build a prompt that includes tool information
+                let toolsPrompt = buildToolsPrompt(for: sessionId)
+                
+                let structuredPrompt = """
+                \(toolsPrompt)
 
-                // Check if the response contains a tool call by examining transcript
-                if let toolCallInfo = extractLastToolCall(from: session.transcript) {
+                User request: \(prompt)
+
+                If you need to use a tool to answer, respond with ONLY a JSON object in this exact format:
+                {"tool_call": {"name": "toolName", "arguments": {...}}}
+
+                If you can answer directly without a tool, just respond normally with text.
+                """
+                
+                let nativeOptions = options.toNativeOptions()
+                let response = try await session.respond(to: structuredPrompt, options: nativeOptions)
+                
+                // Try to parse as a tool call
+                if let toolCall = parseToolCallResponse(response.content) {
                     return [
                         "type": "toolCall",
-                        "toolCall": toolCallInfo
+                        "toolCall": [
+                            "id": UUID().uuidString,
+                            "name": toolCall["name"] ?? "",
+                            "arguments": toolCall["arguments"] ?? [:]
+                        ]
                     ]
                 }
 
@@ -1027,26 +1055,66 @@ final class FoundationModelsManager: @unchecked Sendable {
     }
 
     /// Submit tool result back to the model
-    /// Note: Tool calling API is in beta and may have changed.
+    ///
+    /// **iOS 26 Beta Workaround:**
+    /// Uses prompt-based approach - we send the tool result as part of a new prompt
+    /// and ask the model to continue the conversation.
     func submitToolResultAsync(
         sessionId: String,
         toolResult: [String: Any]
     ) async throws -> [String: Any] {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
-            // Tool calling with submit/respond pattern may not be available in current API.
-            // This feature requires the session.respond(to: ToolOutput) pattern which
-            // may have changed in recent betas.
-            throw FoundationModelsManagerError.generationFailed(
-                "Tool result submission is not yet supported in this beta version. " +
-                "The tool calling API is evolving - please check for updates."
-            )
+            let session = try getSession(sessionId)
+            
+            do {
+                // Extract tool result information
+                let callId = toolResult["callId"] as? String ?? "unknown"
+                let result = toolResult["result"]
+                
+                // Format the result as JSON string
+                var resultString: String
+                if let resultDict = result as? [String: Any],
+                   let jsonData = try? JSONSerialization.data(withJSONObject: resultDict, options: .prettyPrinted),
+                   let json = String(data: jsonData, encoding: .utf8) {
+                    resultString = json
+                } else if let str = result as? String {
+                    resultString = str
+                } else {
+                    resultString = String(describing: result ?? "null")
+                }
+                
+                // Build a prompt that includes the tool result
+                let prompt = """
+                The tool has been executed and returned the following result:
+                
+                ```json
+                \(resultString)
+                ```
+                
+                Please use this information to provide a helpful response to the user's original question.
+                """
+                
+                let response = try await session.respond(to: prompt)
+                
+                return [
+                    "type": "text",
+                    "content": response.content
+                ]
+            } catch let error as LanguageModelSession.GenerationError {
+                throw mapGenerationError(error)
+            } catch {
+                throw FoundationModelsManagerError.generationFailed(error.localizedDescription)
+            }
         }
         #endif
         throw FoundationModelsManagerError.notAvailable
     }
 
     /// Stream response with tool support
+    ///
+    /// **iOS 26 Beta Workaround:**
+    /// Uses prompt-based tool calling with streaming.
     func streamWithToolsAsync(
         sessionId: String,
         prompt: String,
@@ -1059,9 +1127,23 @@ final class FoundationModelsManager: @unchecked Sendable {
             let session = try getSession(sessionId)
 
             do {
+                // Build prompt with tool information
+                let toolsPrompt = buildToolsPrompt(for: sessionId)
+                
+                let structuredPrompt = """
+                \(toolsPrompt)
+
+                User request: \(prompt)
+
+                If you need to use a tool to answer, respond with ONLY a JSON object in this exact format:
+                {"tool_call": {"name": "toolName", "arguments": {...}}}
+
+                If you can answer directly without a tool, just respond normally with text.
+                """
+                
                 var fullResponse = ""
                 let nativeOptions = options.toNativeOptions()
-                let stream = session.streamResponse(to: prompt, options: nativeOptions)
+                let stream = session.streamResponse(to: structuredPrompt, options: nativeOptions)
 
                 for try await partialResponse in stream {
                     let newContent = partialResponse.content
@@ -1072,8 +1154,13 @@ final class FoundationModelsManager: @unchecked Sendable {
                     }
                 }
 
-                // Check for tool call after streaming
-                if let toolCallInfo = extractLastToolCall(from: session.transcript) {
+                // Check for tool call in the response
+                if let toolCall = parseToolCallResponse(fullResponse) {
+                    let toolCallInfo: [String: Any] = [
+                        "id": UUID().uuidString,
+                        "name": toolCall["name"] ?? "",
+                        "arguments": toolCall["arguments"] ?? [:]
+                    ]
                     onToolCall(toolCallInfo)
                     return [
                         "type": "toolCall",
@@ -1132,7 +1219,84 @@ final class FoundationModelsManager: @unchecked Sendable {
     }
     #endif
 
-    // MARK: - Tool Building Helpers
+    // MARK: - Tool Calling Helpers (Prompt-based workaround)
+    //
+    // iOS 26 Beta Workaround:
+    // The native Tool API requires compile-time @Generable argument types.
+    // We use a prompt-based approach instead:
+    // 1. Include tool definitions in the prompt
+    // 2. Ask the model to respond with JSON tool calls
+    // 3. Parse the response to detect and extract tool calls
+    
+    /// Build a prompt section describing available tools
+    private func buildToolsPrompt(for sessionId: String) -> String {
+        var tools: [[String: Any]] = []
+        queue.sync {
+            tools = sessionTools[sessionId] ?? []
+        }
+        
+        guard !tools.isEmpty else {
+            return ""
+        }
+        
+        var prompt = "You have access to the following tools:\n\n"
+        
+        for tool in tools {
+            let name = tool["name"] as? String ?? "unknown"
+            let description = tool["description"] as? String ?? ""
+            prompt += "Tool: \(name)\n"
+            prompt += "Description: \(description)\n"
+            
+            if let parameters = tool["parameters"] as? [String: Any] {
+                if let properties = parameters["properties"] as? [String: Any] {
+                    prompt += "Parameters:\n"
+                    for (paramName, paramInfo) in properties {
+                        if let info = paramInfo as? [String: Any] {
+                            let type = info["type"] as? String ?? "any"
+                            let desc = info["description"] as? String ?? ""
+                            prompt += "  - \(paramName) (\(type)): \(desc)\n"
+                        }
+                    }
+                }
+                if let required = parameters["required"] as? [String] {
+                    prompt += "Required: \(required.joined(separator: ", "))\n"
+                }
+            }
+            prompt += "\n"
+        }
+        
+        return prompt
+    }
+    
+    /// Parse a response to detect if it contains a tool call
+    private func parseToolCallResponse(_ response: String) -> [String: Any]? {
+        let trimmed = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Try to find JSON in the response
+        guard let jsonStart = trimmed.firstIndex(of: "{"),
+              let jsonEnd = trimmed.lastIndex(of: "}") else {
+            return nil
+        }
+        
+        let jsonString = String(trimmed[jsonStart...jsonEnd])
+        
+        guard let data = jsonString.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+        
+        // Check for tool_call format
+        if let toolCall = json["tool_call"] as? [String: Any] {
+            return toolCall
+        }
+        
+        // Also support direct format with "name" and "arguments"
+        if let name = json["name"] as? String, json["arguments"] != nil {
+            return json
+        }
+        
+        return nil
+    }
 
     #if canImport(FoundationModels)
     @available(iOS 26.0, macOS 26.0, *)
