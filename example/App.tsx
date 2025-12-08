@@ -22,6 +22,130 @@ import {
 // Demo tabs
 type Tab = 'basic' | 'structured' | 'tools' | 'session' | 'feedback' | 'coreml';
 
+// ============================================================================
+// Tool Implementations - Real API calls for tool demo
+// ============================================================================
+
+// City coordinates for weather lookup
+const CITY_COORDINATES: Record<string, { lat: number; lon: number }> = {
+  tokyo: { lat: 35.6762, lon: 139.6503 },
+  'new york': { lat: 40.7128, lon: -74.006 },
+  london: { lat: 51.5074, lon: -0.1278 },
+  paris: { lat: 48.8566, lon: 2.3522 },
+  seoul: { lat: 37.5665, lon: 126.978 },
+  sydney: { lat: -33.8688, lon: 151.2093 },
+  los_angeles: { lat: 34.0522, lon: -118.2437 },
+  beijing: { lat: 39.9042, lon: 116.4074 },
+  singapore: { lat: 1.3521, lon: 103.8198 },
+  dubai: { lat: 25.2048, lon: 55.2708 },
+};
+
+// Weather condition codes from Open-Meteo
+const WEATHER_CODES: Record<number, string> = {
+  0: 'Clear sky',
+  1: 'Mainly clear',
+  2: 'Partly cloudy',
+  3: 'Overcast',
+  45: 'Foggy',
+  48: 'Depositing rime fog',
+  51: 'Light drizzle',
+  53: 'Moderate drizzle',
+  55: 'Dense drizzle',
+  61: 'Slight rain',
+  63: 'Moderate rain',
+  65: 'Heavy rain',
+  71: 'Slight snow',
+  73: 'Moderate snow',
+  75: 'Heavy snow',
+  77: 'Snow grains',
+  80: 'Slight rain showers',
+  81: 'Moderate rain showers',
+  82: 'Violent rain showers',
+  85: 'Slight snow showers',
+  86: 'Heavy snow showers',
+  95: 'Thunderstorm',
+  96: 'Thunderstorm with slight hail',
+  99: 'Thunderstorm with heavy hail',
+};
+
+/**
+ * Fetch real weather data from Open-Meteo API (free, no API key needed)
+ */
+async function getWeather(city: string, unit: string = 'celsius'): Promise<Record<string, unknown>> {
+  const cityLower = city.toLowerCase();
+  const coords = CITY_COORDINATES[cityLower];
+  
+  if (!coords) {
+    // Try to use a geocoding fallback or return error
+    return {
+      error: `Unknown city: ${city}. Supported cities: ${Object.keys(CITY_COORDINATES).join(', ')}`,
+    };
+  }
+  
+  const tempUnit = unit === 'fahrenheit' ? 'fahrenheit' : 'celsius';
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${coords.lat}&longitude=${coords.lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m&temperature_unit=${tempUnit}`;
+  
+  try {
+    const response = await fetch(url);
+    const data = await response.json();
+    
+    const current = data.current;
+    const weatherCode = current.weather_code as number;
+    
+    return {
+      city,
+      temperature: current.temperature_2m,
+      unit: tempUnit,
+      humidity: current.relative_humidity_2m,
+      condition: WEATHER_CODES[weatherCode] || 'Unknown',
+      windSpeed: current.wind_speed_10m,
+      windUnit: 'km/h',
+    };
+  } catch (error) {
+    return {
+      error: `Failed to fetch weather: ${error}`,
+    };
+  }
+}
+
+/**
+ * Evaluate a mathematical expression safely
+ */
+function calculate(expression: string): Record<string, unknown> {
+  try {
+    // Simple safe evaluation for basic math expressions
+    // Only allow numbers, operators, parentheses, and spaces
+    const sanitized = expression.replace(/[^0-9+\-*/().%\s]/g, '');
+    
+    if (sanitized !== expression.replace(/\s/g, '').replace(/x/gi, '*')) {
+      // If expression was modified (had invalid chars), be more lenient
+      // Replace 'x' with '*' for multiplication
+      const lenientSanitized = expression.replace(/x/gi, '*').replace(/[^0-9+\-*/().%\s]/g, '');
+      if (lenientSanitized.length > 0) {
+        // eslint-disable-next-line no-eval
+        const result = eval(lenientSanitized);
+        return {
+          expression,
+          sanitizedExpression: lenientSanitized,
+          result: Number(result.toFixed(10)),
+        };
+      }
+    }
+    
+    // eslint-disable-next-line no-eval
+    const result = eval(sanitized);
+    return {
+      expression,
+      result: Number(result.toFixed(10)),
+    };
+  } catch (error) {
+    return {
+      expression,
+      error: `Failed to calculate: ${error}`,
+    };
+  }
+}
+
 // Shared session state (using module-level variable for demo simplicity)
 let globalSessionId: string | null = null;
 
@@ -407,14 +531,24 @@ function ToolsDemo() {
           `[Tool Call: ${name}(${JSON.stringify(args)})]`,
         ]);
 
-        // Simulate tool execution
-        const weatherData = { temperature: 22, condition: 'Partly Cloudy', humidity: 65 };
-        setConversation((prev) => [...prev, `[Tool Result: ${JSON.stringify(weatherData)}]`]);
+        // Execute the actual tool
+        let toolResult: Record<string, unknown>;
+        if (name === 'getWeather') {
+          const typedArgs = args as { city?: string; unit?: string };
+          const city = typedArgs.city || 'Tokyo';
+          const unit = typedArgs.unit || 'celsius';
+          setConversation((prev) => [...prev, `[Fetching weather for ${city}...]`]);
+          toolResult = await getWeather(city, unit);
+        } else {
+          toolResult = { error: `Unknown tool: ${name}` };
+        }
+        
+        setConversation((prev) => [...prev, `[Tool Result: ${JSON.stringify(toolResult)}]`]);
 
         // Submit result back
         const finalResponse = await FoundationModels.submitToolResult(toolSessionId, {
           callId: id,
-          result: weatherData,
+          result: toolResult,
         });
 
         if (finalResponse.content) {
@@ -450,13 +584,21 @@ function ToolsDemo() {
           `[Tool Call: ${name}(${JSON.stringify(args)})]`,
         ]);
 
-        // Simulate calculation
-        const result = { result: 128, expression: '15 * 7 + 23' };
-        setConversation((prev) => [...prev, `[Tool Result: ${JSON.stringify(result)}]`]);
+        // Execute the actual tool
+        let toolResult: Record<string, unknown>;
+        if (name === 'calculate') {
+          const typedArgs = args as { expression?: string };
+          const expression = typedArgs.expression || '15 * 7 + 23';
+          toolResult = calculate(expression);
+        } else {
+          toolResult = { error: `Unknown tool: ${name}` };
+        }
+        
+        setConversation((prev) => [...prev, `[Tool Result: ${JSON.stringify(toolResult)}]`]);
 
         const finalResponse = await FoundationModels.submitToolResult(toolSessionId, {
           callId: id,
-          result,
+          result: toolResult,
         });
 
         if (finalResponse.content) {
