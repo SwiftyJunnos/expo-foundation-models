@@ -1,4 +1,5 @@
 import { NativeModule, requireNativeModule } from 'expo';
+import { Platform } from 'react-native';
 
 import type {
   AdapterDownloadStatus,
@@ -19,7 +20,7 @@ import type {
   TranscriptEntry,
 } from './ExpoFoundationModels.types';
 
-declare class ExpoFoundationModelsModule extends NativeModule<ExpoFoundationModelsModuleEvents> {
+declare class ExpoFoundationModelsModuleType extends NativeModule<ExpoFoundationModelsModuleEvents> {
   // CoreML methods
   loadModel(modelName: string): Promise<string>;
   unloadModel(modelId: string): Promise<void>;
@@ -94,5 +95,49 @@ declare class ExpoFoundationModelsModule extends NativeModule<ExpoFoundationMode
   logFeedback(sessionId: string, options: FeedbackOptions): Promise<FeedbackResult>;
 }
 
-// This call loads the native module object from the JSI.
-export default requireNativeModule<ExpoFoundationModelsModule>('ExpoFoundationModels');
+// Lazy load the native module to prevent crashes during app initialization
+let _nativeModule: ExpoFoundationModelsModuleType | null = null;
+let _loadError: Error | null = null;
+
+function getNativeModule(): ExpoFoundationModelsModuleType {
+  if (_loadError) {
+    throw _loadError;
+  }
+  if (!_nativeModule) {
+    if (Platform.OS !== 'ios') {
+      throw new Error('ExpoFoundationModels is only available on iOS');
+    }
+    try {
+      _nativeModule = requireNativeModule<ExpoFoundationModelsModuleType>('ExpoFoundationModels');
+    } catch (error) {
+      _loadError = error instanceof Error ? error : new Error(String(error));
+      console.error('[ExpoFoundationModels] Failed to load native module:', error);
+      throw _loadError;
+    }
+  }
+  return _nativeModule;
+}
+
+// Create a proxy that lazily loads the native module on first access
+const ExpoFoundationModelsModule = new Proxy({} as ExpoFoundationModelsModuleType, {
+  get(_target, prop: string | symbol) {
+    // Special case for addListener which needs to work for event subscriptions
+    if (prop === 'addListener') {
+      return (...args: Parameters<ExpoFoundationModelsModuleType['addListener']>) => {
+        return getNativeModule().addListener(...args);
+      };
+    }
+    
+    const nativeModule = getNativeModule();
+    const value = nativeModule[prop as keyof ExpoFoundationModelsModuleType];
+    
+    // Bind methods to the native module
+    if (typeof value === 'function') {
+      return value.bind(nativeModule);
+    }
+    
+    return value;
+  },
+});
+
+export default ExpoFoundationModelsModule;
