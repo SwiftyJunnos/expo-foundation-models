@@ -18,7 +18,7 @@ Expo module for Apple's **Foundation Models** (on-device LLM with Apple Intellig
 | **Tool Calling** | Let the model call your functions |
 | **Streaming** | Token-by-token response streaming |
 | **Session Management** | Conversation history, prewarm, resume |
-| **Adapters** | Load fine-tuned models |
+| **Adapters** | Load and use fine-tuned models |
 | **CoreML** | Run any CoreML model |
 
 ### Platform Support
@@ -77,7 +77,7 @@ if (FoundationModels.isAvailable()) {
 | [Structured Output](./docs/structured-output.md) | JSON Schema generation and choices |
 | [Tool Calling](./docs/tool-calling.md) | Function calling and tool execution |
 | [Session Management](./docs/session-management.md) | Transcripts, prewarm, and history |
-| [Adapters](./docs/adapters.md) | Loading fine-tuned models |
+| [Adapters](./docs/adapters.md) | Training and loading fine-tuned models |
 | [Feedback](./docs/feedback.md) | Response quality logging |
 | [CoreML](./docs/coreml.md) | Custom ML model integration |
 | [Error Handling](./docs/error-handling.md) | Error types and handling patterns |
@@ -98,6 +98,54 @@ npx expo run:ios
 - **iOS 16.0+** for CoreML only
 - **Apple Intelligence** enabled in device Settings
 - Device with Apple Silicon (A17+ for Foundation Models)
+
+## Adapter Training
+
+Want to create custom adapters for specialized tasks? Apple provides a Python toolkit for training adapters using LoRA (Low-Rank Adaptation).
+
+| Task | Tool |
+|------|------|
+| **Train adapters** | [Apple's Python Toolkit](https://developer.apple.com/apple-intelligence/foundation-models-adapter/) |
+| **Use adapters** | This package |
+
+### Training Requirements
+
+- Mac with Apple Silicon + 32GB RAM, or Linux GPU
+- Python 3.11+
+- 100-5,000+ training samples (prompt/response pairs)
+
+### Quick Training Overview
+
+```bash
+# 1. Download toolkit from Apple Developer
+# 2. Set up environment
+conda create -n adapter-training python=3.11
+pip install -r requirements.txt
+
+# 3. Train adapter
+python -m examples.train_adapter \
+  --train-data train.jsonl \
+  --eval-data valid.jsonl \
+  --epochs 5
+
+# 4. Export to .fmadapter
+python -m export.export_fmadapter \
+  --adapter-name my_adapter \
+  --checkpoint checkpoints/adapter-final.pt \
+  --output-dir exports/
+```
+
+Then load in your app:
+
+```typescript
+const adapter = await FoundationModels.loadAdapterFromFile('/path/to/my_adapter.fmadapter');
+const sessionId = await FoundationModels.createSession({
+  adapterId: adapter.id,
+  instructions: 'You are a specialized assistant.',
+});
+```
+
+See [Adapters Documentation](./docs/adapters.md) for complete details.
 
 ## License
 

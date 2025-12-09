@@ -4,7 +4,84 @@ Load and use fine-tuned (adapted) models for specialized tasks.
 
 ## Overview
 
-Adapters are custom-trained models that specialize the base Foundation Models for specific use cases. They're distributed via Background Assets and require special entitlements.
+Adapters are custom-trained models that specialize the base Foundation Models for specific use cases. They use a technique called LoRA (Low-Rank Adaptation) to efficiently adapt the on-device language model without modifying its original weights.
+
+This package supports **loading and using** pre-trained adapters. Training adapters requires Apple's separate Python toolkit.
+
+## Training vs Using Adapters
+
+| Task | Tool | Environment |
+|------|------|-------------|
+| **Training adapters** | [Apple's Python Toolkit](https://developer.apple.com/apple-intelligence/foundation-models-adapter/) | Mac with Apple Silicon (32GB+ RAM) or Linux GPU |
+| **Using adapters** | This package (`expo-foundation-models`) | iOS 26+ device with Apple Intelligence |
+
+## Training Adapters
+
+### When to Consider Adapters
+
+Before training an adapter, try prompt engineering or tool calling first. Consider adapters if:
+
+- You need the model to become a subject-matter expert
+- You need specific style, format, or policy adherence
+- Prompt engineering isn't achieving required accuracy
+- You want lower latency (adapters need minimal prompting)
+
+### Training Requirements
+
+| Requirement | Details |
+|-------------|---------|
+| **Hardware** | Mac with Apple Silicon + 32GB RAM, or Linux GPU |
+| **Python** | 3.11 or later |
+| **Data** | 100-1,000 samples for basic tasks, 5,000+ for complex |
+| **Storage** | ~160MB per adapter |
+| **Entitlement** | Required for App Store distribution |
+
+### Training Workflow
+
+1. **Download the toolkit** from [Apple Developer](https://developer.apple.com/download/foundation-models-adapter/)
+
+2. **Set up Python environment**
+   ```bash
+   conda create -n adapter-training python=3.11
+   conda activate adapter-training
+   pip install -r requirements.txt
+   ```
+
+3. **Prepare your dataset** in JSONL format:
+   ```jsonl
+   [{"role": "user", "content": "PROMPT"}, {"role": "assistant", "content": "RESPONSE"}]
+   ```
+
+4. **Train the adapter**
+   ```bash
+   python -m examples.train_adapter \
+     --train-data /path/to/train.jsonl \
+     --eval-data /path/to/valid.jsonl \
+     --epochs 5 \
+     --learning-rate 1e-3 \
+     --batch-size 4 \
+     --checkpoint-dir /path/to/checkpoints/
+   ```
+
+5. **Optionally train draft model** for faster inference (speculative decoding)
+
+6. **Export to `.fmadapter`**
+   ```bash
+   python -m export.export_fmadapter \
+     --adapter-name my_adapter \
+     --checkpoint /path/to/checkpoints/adapter-final.pt \
+     --output-dir /path/to/exports/
+   ```
+
+7. **Load in your app** using this package (see below)
+
+### Important Considerations
+
+- **OS Version Compatibility**: Each adapter works with a *single specific* system model version. You must train separate adapters for each OS version you support.
+- **Distribution**: Adapters (~160MB each) should be hosted on a server and downloaded via Background Assets, not bundled in your app.
+- **Entitlement**: Request the [Foundation Models Framework Adapter Entitlement](https://developer.apple.com/contact/request/foundation-models-framework-adapter-entitlement) before App Store submission.
+
+For complete training documentation, see [Apple's Adapter Training Guide](https://developer.apple.com/apple-intelligence/foundation-models-adapter/).
 
 ## Requirements
 
