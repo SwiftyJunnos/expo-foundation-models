@@ -1,5 +1,5 @@
 import { Platform } from 'react-native';
-import ExpoFoundationModelsModule from './ExpoFoundationModelsModule';
+import ExpoFoundationModelsModule, { isNativeModuleAvailable } from './ExpoFoundationModelsModule';
 import type {
   MLValue,
   MLDictionary,
@@ -410,7 +410,16 @@ export const FoundationModels = {
     if (Platform.OS !== 'ios') {
       return false;
     }
-    return ExpoFoundationModelsModule.isAvailable();
+    // First check if native module is available
+    if (!isNativeModuleAvailable()) {
+      return false;
+    }
+    try {
+      return ExpoFoundationModelsModule.isAvailable();
+    } catch (error) {
+      console.warn('[FoundationModels] isAvailable() failed:', error);
+      return false;
+    }
   },
 
   /**
@@ -447,7 +456,25 @@ export const FoundationModels = {
         reason: 'platformNotSupported',
       };
     }
-    return ExpoFoundationModelsModule.getAvailability() as Availability;
+    // Check if native module is available
+    if (!isNativeModuleAvailable()) {
+      return {
+        available: false,
+        status: 'unavailable',
+        reason: 'nativeModuleNotAvailable' as UnavailableReason,
+        message: 'Native module not properly linked',
+      };
+    }
+    try {
+      return ExpoFoundationModelsModule.getAvailability() as Availability;
+    } catch (error) {
+      return {
+        available: false,
+        status: 'unavailable',
+        reason: 'unknown' as UnavailableReason,
+        message: error instanceof Error ? error.message : String(error),
+      };
+    }
   },
 
   /**

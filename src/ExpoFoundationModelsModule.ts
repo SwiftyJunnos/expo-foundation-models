@@ -1,4 +1,4 @@
-import { NativeModule, requireNativeModule } from 'expo';
+import { NativeModule, requireOptionalNativeModule } from 'expo';
 import { Platform } from 'react-native';
 
 import type {
@@ -97,7 +97,27 @@ declare class ExpoFoundationModelsModuleType extends NativeModule<ExpoFoundation
 
 // Lazy load the native module to prevent crashes during app initialization
 let _nativeModule: ExpoFoundationModelsModuleType | null = null;
+let _loadAttempted = false;
 let _loadError: Error | null = null;
+
+/**
+ * Check if the native module is available without throwing
+ */
+export function isNativeModuleAvailable(): boolean {
+  if (Platform.OS !== 'ios') {
+    return false;
+  }
+  if (_loadAttempted) {
+    return _nativeModule !== null;
+  }
+  // Try to load the module
+  _loadAttempted = true;
+  _nativeModule = requireOptionalNativeModule<ExpoFoundationModelsModuleType>('ExpoFoundationModels');
+  if (!_nativeModule) {
+    console.warn('[ExpoFoundationModels] Native module not available - module may not be properly linked');
+  }
+  return _nativeModule !== null;
+}
 
 function getNativeModule(): ExpoFoundationModelsModuleType {
   if (_loadError) {
@@ -107,11 +127,16 @@ function getNativeModule(): ExpoFoundationModelsModuleType {
     if (Platform.OS !== 'ios') {
       throw new Error('ExpoFoundationModels is only available on iOS');
     }
-    try {
-      _nativeModule = requireNativeModule<ExpoFoundationModelsModuleType>('ExpoFoundationModels');
-    } catch (error) {
-      _loadError = error instanceof Error ? error : new Error(String(error));
-      console.error('[ExpoFoundationModels] Failed to load native module:', error);
+    if (!_loadAttempted) {
+      _loadAttempted = true;
+      _nativeModule = requireOptionalNativeModule<ExpoFoundationModelsModuleType>('ExpoFoundationModels');
+    }
+    if (!_nativeModule) {
+      _loadError = new Error(
+        'Cannot find native module ExpoFoundationModels. ' +
+        'Make sure the native module is properly linked and try running `pod install` in the ios directory.'
+      );
+      console.error('[ExpoFoundationModels] Failed to load native module:', _loadError.message);
       throw _loadError;
     }
   }
