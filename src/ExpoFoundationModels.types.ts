@@ -563,6 +563,22 @@ export type FeedbackResult = {
 };
 
 /**
+ * Device locale information for debugging language support issues.
+ */
+export type LocaleInfo = {
+  /** Current locale identifier (e.g., "ko_KR", "en_US") */
+  currentIdentifier: string;
+  /** ISO 639 language code (e.g., "ko", "en") */
+  languageCode: string;
+  /** ISO 3166 region code (e.g., "KR", "US") */
+  regionCode: string;
+  /** User's preferred languages in order */
+  preferredLanguages: string[];
+  /** Calendar identifier */
+  calendar: string;
+};
+
+/**
  * Events emitted by the ExpoFoundationModels module.
  */
 export type ExpoFoundationModelsModuleEvents = {

@@ -658,24 +658,19 @@ final class FoundationModelsManager: @unchecked Sendable {
             let session = try getSession(sessionId)
 
             do {
-                // Build a prompt that includes the schema and asks for JSON output
-                let schemaJson = try JSONSerialization.data(withJSONObject: schema, options: .prettyPrinted)
+                // Build a prompt that includes only the schema (no English instructions)
+                // English text mixed with non-English prompts can trigger unsupportedLanguageOrLocale errors
+                let schemaJson = try JSONSerialization.data(withJSONObject: schema, options: .sortedKeys)
                 let schemaString = String(data: schemaJson, encoding: .utf8) ?? "{}"
-                
+
+                // Keep prompt minimal - just the user prompt + schema as JSON
+                // The session's system instructions should already specify output format
                 let structuredPrompt = """
                 \(prompt)
 
-                You MUST respond with a valid JSON object that conforms to this JSON Schema:
-                ```json
-                \(schemaString)
-                ```
-
-                IMPORTANT:
-                - Output ONLY the JSON object, no markdown code blocks, no explanation
-                - Ensure all required fields are present
-                - Use the exact field names from the schema
+                JSON Schema: \(schemaString)
                 """
-                
+
                 let nativeOptions = options.toNativeOptions()
                 let response = try await session.respond(to: structuredPrompt, options: nativeOptions)
                 
@@ -710,19 +705,16 @@ final class FoundationModelsManager: @unchecked Sendable {
 
             do {
                 // Build a prompt that constrains the response to one of the choices
+                // Avoid English instructions that can trigger unsupportedLanguageOrLocale errors
                 let choicesFormatted = choices.map { "\"\($0)\"" }.joined(separator: ", ")
-                
+
+                // Keep prompt minimal - just user prompt + choices
                 let structuredPrompt = """
                 \(prompt)
 
-                You MUST respond with exactly ONE of these options: [\(choicesFormatted)]
-
-                IMPORTANT:
-                - Output ONLY the chosen option, nothing else
-                - Do not add quotes, explanation, or any other text
-                - Your entire response must be exactly one of the listed options
+                [\(choicesFormatted)]
                 """
-                
+
                 let nativeOptions = options.toNativeOptions()
                 let response = try await session.respond(to: structuredPrompt, options: nativeOptions)
                 
@@ -768,24 +760,18 @@ final class FoundationModelsManager: @unchecked Sendable {
             let session = try getSession(sessionId)
 
             do {
-                // Build a prompt that includes the schema and asks for JSON output
-                let schemaJson = try JSONSerialization.data(withJSONObject: schema, options: .prettyPrinted)
+                // Build a prompt that includes only the schema (no English instructions)
+                // English text mixed with non-English prompts can trigger unsupportedLanguageOrLocale errors
+                let schemaJson = try JSONSerialization.data(withJSONObject: schema, options: .sortedKeys)
                 let schemaString = String(data: schemaJson, encoding: .utf8) ?? "{}"
-                
+
+                // Keep prompt minimal - just the user prompt + schema as JSON
                 let structuredPrompt = """
                 \(prompt)
 
-                You MUST respond with a valid JSON object that conforms to this JSON Schema:
-                ```json
-                \(schemaString)
-                ```
-
-                IMPORTANT:
-                - Output ONLY the JSON object, no markdown code blocks, no explanation
-                - Ensure all required fields are present
-                - Use the exact field names from the schema
+                JSON Schema: \(schemaString)
                 """
-                
+
                 let nativeOptions = options.toNativeOptions()
                 let stream = session.streamResponse(to: structuredPrompt, options: nativeOptions)
                 
@@ -1785,6 +1771,25 @@ public class ExpoFoundationModelsModule: Module {
 
         Function("getAvailability") { () -> [String: Any] in
             return FoundationModelsManager.shared.getAvailability()
+        }
+
+        Function("getLocaleInfo") { () -> [String: Any] in
+            var info: [String: Any] = [
+                "currentIdentifier": Locale.current.identifier,
+                "preferredLanguages": Locale.preferredLanguages,
+                "calendar": Locale.current.calendar.identifier
+            ]
+
+            // iOS 16+ language code access
+            if #available(iOS 16, macOS 13, *) {
+                info["languageCode"] = Locale.current.language.languageCode?.identifier ?? "unknown"
+                info["regionCode"] = Locale.current.region?.identifier ?? "unknown"
+            } else {
+                info["languageCode"] = Locale.current.languageCode ?? "unknown"
+                info["regionCode"] = Locale.current.regionCode ?? "unknown"
+            }
+
+            return info
         }
 
         AsyncFunction("createSession") { (instructions: String?) -> String in
