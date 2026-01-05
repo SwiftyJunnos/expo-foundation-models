@@ -37,6 +37,7 @@ import type {
   FeedbackIssue,
   FeedbackOptions,
   FeedbackResult,
+  LocaleInfo,
 } from './ExpoFoundationModels.types';
 
 export type {
@@ -76,6 +77,7 @@ export type {
   FeedbackIssue,
   FeedbackOptions,
   FeedbackResult,
+  LocaleInfo,
 };
 
 // MARK: - Validation Helpers
@@ -478,6 +480,56 @@ export const FoundationModels = {
   },
 
   /**
+   * Get device locale information for debugging language support issues.
+   *
+   * This is useful for diagnosing "unsupported language" errors when the
+   * device settings appear correct.
+   *
+   * @returns LocaleInfo object with device locale configuration
+   *
+   * @example
+   * ```typescript
+   * const locale = FoundationModels.getLocaleInfo();
+   * console.log('Language:', locale.languageCode);  // e.g., "ko"
+   * console.log('Region:', locale.regionCode);      // e.g., "KR"
+   * console.log('Identifier:', locale.currentIdentifier);  // e.g., "ko_KR"
+   * console.log('Preferred:', locale.preferredLanguages);  // e.g., ["ko-KR", "en-US"]
+   * ```
+   */
+  getLocaleInfo(): LocaleInfo {
+    if (Platform.OS !== 'ios') {
+      return {
+        currentIdentifier: 'unknown',
+        languageCode: 'unknown',
+        regionCode: 'unknown',
+        preferredLanguages: [],
+        calendar: 'unknown',
+      };
+    }
+    if (!isNativeModuleAvailable()) {
+      return {
+        currentIdentifier: 'unknown',
+        languageCode: 'unknown',
+        regionCode: 'unknown',
+        preferredLanguages: [],
+        calendar: 'unknown',
+      };
+    }
+    try {
+      return ExpoFoundationModelsModule.getLocaleInfo() as LocaleInfo;
+    } catch (error) {
+      console.warn('[FoundationModels] getLocaleInfo() failed:', error);
+      return {
+        currentIdentifier: 'error',
+        languageCode: 'error',
+        regionCode: 'error',
+        preferredLanguages: [],
+        calendar: 'error',
+      };
+    }
+  },
+
+  /**
    * Create a new Foundation Models session.
    *
    * @param optionsOrInstructions - Session options or legacy string instructions
@@ -507,8 +559,11 @@ export const FoundationModels = {
 
     try {
       // Handle legacy string API
-      if (optionsOrInstructions === undefined || typeof optionsOrInstructions === 'string') {
-        return await ExpoFoundationModelsModule.createSession(optionsOrInstructions ?? null);
+      if (optionsOrInstructions === undefined) {
+        return await ExpoFoundationModelsModule.createSession(null);
+      }
+      if (typeof optionsOrInstructions === 'string') {
+        return await ExpoFoundationModelsModule.createSession(optionsOrInstructions);
       }
 
       // Handle new options object API
