@@ -5,15 +5,20 @@ import type {
   AdapterDownloadStatus,
   AdapterInfo,
   Availability,
+  AvailabilityDiagnostics,
+  CoreMLModelDiagnostics,
   CreateSessionWithTranscriptOptions,
   ExpoFoundationModelsModuleEvents,
   ExtendedSessionOptions,
   FeedbackOptions,
   FeedbackResult,
   GenerationOptions,
+  InputValidationResult,
   JSONSchema,
   LoadAdapterOptions,
+  MLDictionary,
   PrewarmOptions,
+  SessionDiagnostics,
   SessionOptions,
   ToolResponse,
   ToolResult,
@@ -28,9 +33,17 @@ declare class ExpoFoundationModelsModuleType extends NativeModule<ExpoFoundation
   isModelLoaded(modelId: string): boolean;
   getLoadedModels(): string[];
 
+  // CoreML Diagnostics
+  getModelDiagnostics(modelId: string): Promise<CoreMLModelDiagnostics>;
+  validateModelInput(modelId: string, input: MLDictionary): Promise<InputValidationResult>;
+
   // Foundation Models - Availability
   isAvailable(): boolean;
   getAvailability(): Availability;
+
+  // Foundation Models - Diagnostics
+  getAvailabilityDiagnostics(): AvailabilityDiagnostics;
+  getSessionDiagnostics(sessionId: string): Promise<SessionDiagnostics>;
 
   // Foundation Models - Session Management
   createSession(instructions: string | null): Promise<string>;

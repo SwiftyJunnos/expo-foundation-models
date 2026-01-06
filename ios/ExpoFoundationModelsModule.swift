@@ -37,6 +37,180 @@ enum CoreMLManagerError: Error, LocalizedError {
     }
 }
 
+// MARK: - CoreML Error Diagnostics
+
+/// Root cause categories for CoreML errors
+enum CoreMLErrorCause: String, Codable {
+    // Load failures
+    case computeUnitIncompatible = "computeUnitIncompatible"
+    case fileCorrupted = "fileCorrupted"
+    case fileNotFound = "fileNotFound"
+    case insufficientMemory = "insufficientMemory"
+    case unsupportedOperation = "unsupportedOperation"
+    case modelVersionMismatch = "modelVersionMismatch"
+    case compilationRequired = "compilationRequired"
+
+    // Prediction failures
+    case inputShapeMismatch = "inputShapeMismatch"
+    case missingFeature = "missingFeature"
+    case dataTypeMismatch = "dataTypeMismatch"
+    case numericOverflow = "numericOverflow"
+    case invalidInputValue = "invalidInputValue"
+    case memoryAllocationFailed = "memoryAllocationFailed"
+
+    // General
+    case unknown = "unknown"
+
+    var explanation: String {
+        switch self {
+        case .computeUnitIncompatible:
+            return "The model requires compute units (Neural Engine, GPU) not available on this device"
+        case .fileCorrupted:
+            return "The model file appears to be corrupted or incomplete"
+        case .fileNotFound:
+            return "The model file was not found in the app bundle"
+        case .insufficientMemory:
+            return "Not enough memory available to load the model"
+        case .unsupportedOperation:
+            return "The model contains operations not supported on this device or iOS version"
+        case .modelVersionMismatch:
+            return "The model was compiled for a different CoreML version"
+        case .compilationRequired:
+            return "The model needs to be compiled (.mlmodelc) before use"
+        case .inputShapeMismatch:
+            return "The input data shape does not match what the model expects"
+        case .missingFeature:
+            return "A required input feature was not provided"
+        case .dataTypeMismatch:
+            return "The input data type does not match what the model expects"
+        case .numericOverflow:
+            return "A numeric value exceeded the allowed range"
+        case .invalidInputValue:
+            return "An input value is invalid (NaN, Infinity, or out of range)"
+        case .memoryAllocationFailed:
+            return "Failed to allocate memory for the prediction"
+        case .unknown:
+            return "An unknown error occurred"
+        }
+    }
+}
+
+/// Compute unit diagnostic information
+struct ComputeUnitDiagnostics: Codable {
+    let availableUnits: [String]
+    let requestedUnit: String?
+
+    func toDict() -> [String: Any] {
+        var dict: [String: Any] = ["availableUnits": availableUnits]
+        if let requested = requestedUnit {
+            dict["requestedUnit"] = requested
+        }
+        return dict
+    }
+}
+
+/// Input shape diagnostic information for prediction errors
+struct InputShapeDiagnostics: Codable {
+    let featureName: String
+    let expectedType: String
+    let receivedType: String?
+    let expectedShape: [Int]?
+    let receivedShape: [Int]?
+
+    func toDict() -> [String: Any] {
+        var dict: [String: Any] = [
+            "featureName": featureName,
+            "expectedType": expectedType
+        ]
+        if let received = receivedType {
+            dict["receivedType"] = received
+        }
+        if let expected = expectedShape {
+            dict["expectedShape"] = expected
+        }
+        if let received = receivedShape {
+            dict["receivedShape"] = received
+        }
+        return dict
+    }
+}
+
+/// Device information for diagnostics
+struct DeviceInfoDiagnostics: Codable {
+    let model: String
+    let osVersion: String
+    let hasNeuralEngine: Bool
+    let availableMemoryMB: Int
+
+    func toDict() -> [String: Any] {
+        return [
+            "model": model,
+            "osVersion": osVersion,
+            "hasNeuralEngine": hasNeuralEngine,
+            "availableMemoryMB": availableMemoryMB
+        ]
+    }
+}
+
+/// Comprehensive CoreML diagnostics container
+struct CoreMLDiagnostics {
+    let modelName: String?
+    let modelId: String?
+    let computeUnits: ComputeUnitDiagnostics?
+    let inputShapes: [InputShapeDiagnostics]?
+    let deviceInfo: DeviceInfoDiagnostics?
+    let timestamp: Date
+
+    func toDict() -> [String: Any] {
+        var dict: [String: Any] = [
+            "timestamp": ISO8601DateFormatter().string(from: timestamp)
+        ]
+        if let name = modelName {
+            dict["modelName"] = name
+        }
+        if let id = modelId {
+            dict["modelId"] = id
+        }
+        if let compute = computeUnits {
+            dict["computeUnits"] = compute.toDict()
+        }
+        if let shapes = inputShapes {
+            dict["inputShapes"] = shapes.map { $0.toDict() }
+        }
+        if let device = deviceInfo {
+            dict["deviceInfo"] = device.toDict()
+        }
+        return dict
+    }
+}
+
+/// Enhanced CoreML error with diagnostic information
+struct EnhancedCoreMLError: Error, LocalizedError {
+    let originalError: CoreMLManagerError
+    let cause: CoreMLErrorCause
+    let diagnostics: CoreMLDiagnostics
+    let suggestions: [String]
+
+    var errorDescription: String? {
+        var message = originalError.errorDescription ?? "CoreML error"
+        message += "\n\nRoot cause: \(cause.explanation)"
+        if !suggestions.isEmpty {
+            message += "\n\nSuggestions:\n" + suggestions.map { "• \($0)" }.joined(separator: "\n")
+        }
+        return message
+    }
+
+    func toDict() -> [String: Any] {
+        return [
+            "message": originalError.errorDescription ?? "CoreML error",
+            "cause": cause.rawValue,
+            "causeExplanation": cause.explanation,
+            "diagnostics": diagnostics.toDict(),
+            "suggestions": suggestions
+        ]
+    }
+}
+
 /// A feature provider that wraps a dictionary for CoreML input
 class DictionaryFeatureProvider: NSObject, MLFeatureProvider {
     let dictionary: [String: Any]
@@ -241,6 +415,202 @@ final class CoreMLManager: @unchecked Sendable {
         }
         return models
     }
+
+    /// Get model diagnostics
+    func getModelDiagnostics(modelId: String) throws -> [String: Any] {
+        var model: MLModel?
+        var modelName: String?
+        queue.sync {
+            model = loadedModels[modelId]
+            modelName = modelNames[modelId]
+        }
+
+        guard let mlModel = model else {
+            throw CoreMLManagerError.modelNotLoaded(id: modelId)
+        }
+
+        let description = mlModel.modelDescription
+
+        // Get input features
+        var inputFeatures: [[String: Any]] = []
+        for (name, inputDesc) in description.inputDescriptionsByName {
+            var feature: [String: Any] = [
+                "name": name,
+                "type": featureTypeToString(inputDesc.type)
+            ]
+            if inputDesc.isOptional {
+                feature["isOptional"] = true
+            }
+            if let multiArrayConstraint = inputDesc.multiArrayConstraint {
+                feature["shape"] = multiArrayConstraint.shape.map { $0.intValue }
+                feature["dataType"] = multiArrayDataTypeToString(multiArrayConstraint.dataType)
+            }
+            inputFeatures.append(feature)
+        }
+
+        // Get output features
+        var outputFeatures: [[String: Any]] = []
+        for (name, outputDesc) in description.outputDescriptionsByName {
+            var feature: [String: Any] = [
+                "name": name,
+                "type": featureTypeToString(outputDesc.type)
+            ]
+            if let multiArrayConstraint = outputDesc.multiArrayConstraint {
+                feature["shape"] = multiArrayConstraint.shape.map { $0.intValue }
+                feature["dataType"] = multiArrayDataTypeToString(multiArrayConstraint.dataType)
+            }
+            outputFeatures.append(feature)
+        }
+
+        return [
+            "modelId": modelId,
+            "modelName": modelName ?? "unknown",
+            "isLoaded": true,
+            "inputFeatures": inputFeatures,
+            "outputFeatures": outputFeatures,
+            "deviceInfo": ErrorAnalyzer.shared.gatherDeviceInfo().toDict(),
+            "timestamp": ISO8601DateFormatter().string(from: Date())
+        ]
+    }
+
+    /// Validate input before prediction
+    func validateModelInput(modelId: String, input: [String: Any]) throws -> [String: Any] {
+        var model: MLModel?
+        queue.sync {
+            model = loadedModels[modelId]
+        }
+
+        guard let mlModel = model else {
+            throw CoreMLManagerError.modelNotLoaded(id: modelId)
+        }
+
+        let description = mlModel.modelDescription
+        var issues: [[String: Any]] = []
+        var suggestions: [String] = []
+
+        // Check each expected input
+        for (featureName, featureDesc) in description.inputDescriptionsByName {
+            // Check if required feature is missing
+            if !featureDesc.isOptional && input[featureName] == nil {
+                issues.append([
+                    "featureName": featureName,
+                    "issue": "missingFeature",
+                    "expectedType": featureTypeToString(featureDesc.type)
+                ])
+                suggestions.append("Provide the required input feature '\(featureName)'")
+                continue
+            }
+
+            // If feature is provided, validate type
+            if let value = input[featureName] {
+                let receivedType = getValueType(value)
+                let expectedType = featureTypeToString(featureDesc.type)
+
+                // Check for type compatibility
+                if !isTypeCompatible(value: value, expectedType: featureDesc.type) {
+                    issues.append([
+                        "featureName": featureName,
+                        "issue": "typeMismatch",
+                        "expectedType": expectedType,
+                        "receivedType": receivedType
+                    ])
+                    suggestions.append("Convert '\(featureName)' from \(receivedType) to \(expectedType)")
+                }
+
+                // Check shape for arrays
+                if let multiArrayConstraint = featureDesc.multiArrayConstraint,
+                   let array = value as? [Any] {
+                    let expectedShape = multiArrayConstraint.shape.map { $0.intValue }
+                    let receivedShape = [array.count]
+
+                    if expectedShape != receivedShape && !expectedShape.isEmpty {
+                        issues.append([
+                            "featureName": featureName,
+                            "issue": "shapeMismatch",
+                            "expectedShape": expectedShape,
+                            "receivedShape": receivedShape
+                        ])
+                        suggestions.append("Reshape '\(featureName)' from \(receivedShape) to \(expectedShape)")
+                    }
+                }
+            }
+        }
+
+        // Check for unexpected inputs
+        for inputName in input.keys {
+            if description.inputDescriptionsByName[inputName] == nil {
+                issues.append([
+                    "featureName": inputName,
+                    "issue": "unexpectedFeature"
+                ])
+                suggestions.append("Remove unexpected input feature '\(inputName)'")
+            }
+        }
+
+        return [
+            "isValid": issues.isEmpty,
+            "issues": issues,
+            "suggestions": suggestions
+        ]
+    }
+
+    // Helper methods for diagnostics
+    private func featureTypeToString(_ type: MLFeatureType) -> String {
+        switch type {
+        case .double: return "Double"
+        case .int64: return "Int64"
+        case .string: return "String"
+        case .multiArray: return "MultiArray"
+        case .dictionary: return "Dictionary"
+        case .image: return "Image"
+        case .sequence: return "Sequence"
+        case .invalid: return "Invalid"
+        case .state: return "State"
+        @unknown default: return "Unknown"
+        }
+    }
+
+    private func multiArrayDataTypeToString(_ type: MLMultiArrayDataType) -> String {
+        switch type {
+        case .double: return "Double"
+        case .float32: return "Float32"
+        case .float16: return "Float16"
+        case .int32: return "Int32"
+        @unknown default: return "Unknown"
+        }
+    }
+
+    private func getValueType(_ value: Any) -> String {
+        if value is Double || value is Float {
+            return "Double"
+        } else if value is Int {
+            return "Int64"
+        } else if value is String {
+            return "String"
+        } else if value is [Any] {
+            return "Array"
+        } else if value is [String: Any] {
+            return "Dictionary"
+        }
+        return "Unknown"
+    }
+
+    private func isTypeCompatible(value: Any, expectedType: MLFeatureType) -> Bool {
+        switch expectedType {
+        case .double:
+            return value is Double || value is Float || value is Int || value is NSNumber
+        case .int64:
+            return value is Int || value is Int64 || value is NSNumber
+        case .string:
+            return value is String
+        case .multiArray:
+            return value is [Any] || value is [Double] || value is [Float] || value is [Int]
+        case .dictionary:
+            return value is [String: Any]
+        default:
+            return true // Allow for unknown types
+        }
+    }
 }
 
 // MARK: - Foundation Models Manager
@@ -334,6 +704,417 @@ struct FoundationModelsManagerError: Error, LocalizedError {
             dict["context"] = ctx
         }
         return dict
+    }
+}
+
+// MARK: - Foundation Models Error Diagnostics
+
+/// Root cause categories for Foundation Models errors
+enum FoundationModelsErrorCause: String, Codable {
+    // Availability issues
+    case deviceNotEligible = "deviceNotEligible"
+    case appleIntelligenceDisabled = "appleIntelligenceDisabled"
+    case modelNotDownloaded = "modelNotDownloaded"
+    case modelDownloading = "modelDownloading"
+    case unsupportedRegion = "unsupportedRegion"
+    case unsupportedOSVersion = "unsupportedOSVersion"
+
+    // Generation issues
+    case contextWindowExceeded = "contextWindowExceeded"
+    case inputTooLong = "inputTooLong"
+    case outputTruncated = "outputTruncated"
+    case unsupportedLanguage = "unsupportedLanguage"
+
+    // Safety issues
+    case guardrailViolation = "guardrailViolation"
+    case contentRefused = "contentRefused"
+
+    // Session issues
+    case sessionExpired = "sessionExpired"
+    case sessionInvalidated = "sessionInvalidated"
+    case concurrencyLimit = "concurrencyLimit"
+
+    // General
+    case unknown = "unknown"
+
+    var explanation: String {
+        switch self {
+        case .deviceNotEligible:
+            return "This device does not support Apple Intelligence. Requires iPhone 15 Pro or newer, or M1+ Mac"
+        case .appleIntelligenceDisabled:
+            return "Apple Intelligence is not enabled. Enable it in Settings > Apple Intelligence & Siri"
+        case .modelNotDownloaded:
+            return "The on-device model has not been downloaded yet"
+        case .modelDownloading:
+            return "The on-device model is currently downloading"
+        case .unsupportedRegion:
+            return "Apple Intelligence is not available in this region"
+        case .unsupportedOSVersion:
+            return "This feature requires iOS 26 or later"
+        case .contextWindowExceeded:
+            return "The conversation exceeded the maximum context window size"
+        case .inputTooLong:
+            return "The input prompt is too long for the model to process"
+        case .outputTruncated:
+            return "The response was truncated due to token limits"
+        case .unsupportedLanguage:
+            return "The requested language is not supported by the model"
+        case .guardrailViolation:
+            return "The content was blocked by safety filters"
+        case .contentRefused:
+            return "The model refused to generate the requested content"
+        case .sessionExpired:
+            return "The session has expired or timed out"
+        case .sessionInvalidated:
+            return "The session was invalidated due to an error"
+        case .concurrencyLimit:
+            return "Too many concurrent requests. Please wait and try again"
+        case .unknown:
+            return "An unknown error occurred"
+        }
+    }
+}
+
+/// Context window diagnostic information
+struct ContextWindowDiagnostics: Codable {
+    let estimatedUsedTokens: Int
+    let maxTokens: Int
+    let remainingTokens: Int
+
+    func toDict() -> [String: Any] {
+        return [
+            "estimatedUsedTokens": estimatedUsedTokens,
+            "maxTokens": maxTokens,
+            "remainingTokens": remainingTokens
+        ]
+    }
+}
+
+/// Device eligibility diagnostic information for Foundation Models
+struct DeviceEligibilityDiagnostics: Codable {
+    let deviceModel: String
+    let osVersion: String
+    let requiredOSVersion: String
+    let appleIntelligenceEnabled: Bool?
+    let modelDownloaded: Bool?
+
+    func toDict() -> [String: Any] {
+        var dict: [String: Any] = [
+            "deviceModel": deviceModel,
+            "osVersion": osVersion,
+            "requiredOSVersion": requiredOSVersion
+        ]
+        if let enabled = appleIntelligenceEnabled {
+            dict["appleIntelligenceEnabled"] = enabled
+        }
+        if let downloaded = modelDownloaded {
+            dict["modelDownloaded"] = downloaded
+        }
+        return dict
+    }
+}
+
+/// Comprehensive Foundation Models diagnostics container
+struct FoundationModelsDiagnostics {
+    let sessionId: String?
+    let contextWindow: ContextWindowDiagnostics?
+    let deviceEligibility: DeviceEligibilityDiagnostics?
+    let timestamp: Date
+
+    func toDict() -> [String: Any] {
+        var dict: [String: Any] = [
+            "timestamp": ISO8601DateFormatter().string(from: timestamp)
+        ]
+        if let id = sessionId {
+            dict["sessionId"] = id
+        }
+        if let context = contextWindow {
+            dict["contextWindow"] = context.toDict()
+        }
+        if let eligibility = deviceEligibility {
+            dict["deviceEligibility"] = eligibility.toDict()
+        }
+        return dict
+    }
+}
+
+/// Enhanced Foundation Models error with diagnostic information
+struct EnhancedFoundationModelsError: Error, LocalizedError {
+    let originalError: FoundationModelsManagerError
+    let cause: FoundationModelsErrorCause
+    let diagnostics: FoundationModelsDiagnostics
+    let suggestions: [String]
+
+    var errorDescription: String? {
+        var message = originalError.message
+        message += "\n\nRoot cause: \(cause.explanation)"
+        if !suggestions.isEmpty {
+            message += "\n\nSuggestions:\n" + suggestions.map { "• \($0)" }.joined(separator: "\n")
+        }
+        return message
+    }
+
+    func toDict() -> [String: Any] {
+        var dict = originalError.toDict()
+        dict["cause"] = cause.rawValue
+        dict["causeExplanation"] = cause.explanation
+        dict["diagnostics"] = diagnostics.toDict()
+        dict["suggestions"] = suggestions
+        return dict
+    }
+}
+
+// MARK: - Error Analyzer
+
+/// Singleton that analyzes errors to determine root causes and generate suggestions
+final class ErrorAnalyzer {
+    static let shared = ErrorAnalyzer()
+    private init() {}
+
+    /// Analyze a CoreML error and determine root cause
+    func analyzeCoreMLError(
+        _ error: Error,
+        modelName: String?,
+        modelId: String?
+    ) -> (cause: CoreMLErrorCause, suggestions: [String]) {
+        let errorMessage = error.localizedDescription.lowercased()
+        var cause: CoreMLErrorCause = .unknown
+        var suggestions: [String] = []
+
+        // Analyze error message patterns
+        if errorMessage.contains("compute") || errorMessage.contains("neural engine") || errorMessage.contains("gpu") {
+            cause = .computeUnitIncompatible
+            suggestions = [
+                "Try setting computeUnits to .cpuOnly in model configuration",
+                "Ensure the model is compatible with this device's compute capabilities"
+            ]
+        } else if errorMessage.contains("memory") || errorMessage.contains("allocation") {
+            if errorMessage.contains("prediction") || errorMessage.contains("inference") {
+                cause = .memoryAllocationFailed
+            } else {
+                cause = .insufficientMemory
+            }
+            suggestions = [
+                "Free up device memory by closing other apps",
+                "Consider using a smaller model variant",
+                "Try loading the model when memory pressure is lower"
+            ]
+        } else if errorMessage.contains("shape") || errorMessage.contains("dimension") {
+            cause = .inputShapeMismatch
+            suggestions = [
+                "Check that input dimensions match the model's expected input shape",
+                "Verify array lengths match the model specification",
+                "Review the model's input description for exact requirements"
+            ]
+        } else if errorMessage.contains("type") || errorMessage.contains("conversion") || errorMessage.contains("cast") {
+            cause = .dataTypeMismatch
+            suggestions = [
+                "Ensure input values are of the correct type (Double, Float, etc.)",
+                "Check for type mismatches in array elements",
+                "Review the model's expected input types"
+            ]
+        } else if errorMessage.contains("not found") || errorMessage.contains("no such file") || errorMessage.contains("missing") {
+            if errorMessage.contains("feature") || errorMessage.contains("input") {
+                cause = .missingFeature
+                suggestions = [
+                    "Provide all required input features",
+                    "Check the model's input description for required feature names"
+                ]
+            } else {
+                cause = .fileNotFound
+                suggestions = [
+                    "Verify the model file is included in the app bundle",
+                    "Check the model filename matches exactly (case-sensitive)",
+                    "Ensure the model has been compiled (.mlmodelc)"
+                ]
+            }
+        } else if errorMessage.contains("corrupt") || errorMessage.contains("invalid format") || errorMessage.contains("malformed") {
+            cause = .fileCorrupted
+            suggestions = [
+                "Re-export the model from its source",
+                "Verify the model file wasn't truncated during copy",
+                "Check that the model version is compatible"
+            ]
+        } else if errorMessage.contains("unsupported") || errorMessage.contains("not supported") {
+            cause = .unsupportedOperation
+            suggestions = [
+                "Check if the model uses operations supported on this iOS version",
+                "Consider using a different model architecture",
+                "Update to the latest iOS version"
+            ]
+        } else if errorMessage.contains("compile") || errorMessage.contains("compilation") {
+            cause = .compilationRequired
+            suggestions = [
+                "Ensure Xcode has compiled the .mlmodel to .mlmodelc",
+                "Add the model to the app target in Xcode"
+            ]
+        } else if errorMessage.contains("overflow") || errorMessage.contains("range") {
+            cause = .numericOverflow
+            suggestions = [
+                "Check input values are within the expected range",
+                "Normalize input data before prediction"
+            ]
+        } else if errorMessage.contains("nan") || errorMessage.contains("infinity") || errorMessage.contains("invalid") {
+            cause = .invalidInputValue
+            suggestions = [
+                "Validate input values before prediction (no NaN or Infinity)",
+                "Check for division by zero or invalid calculations"
+            ]
+        }
+
+        return (cause, suggestions)
+    }
+
+    /// Analyze a Foundation Models error and determine root cause
+    func analyzeFoundationModelsError(
+        _ error: Error,
+        sessionId: String?
+    ) -> (cause: FoundationModelsErrorCause, suggestions: [String]) {
+        let errorMessage = error.localizedDescription.lowercased()
+        var cause: FoundationModelsErrorCause = .unknown
+        var suggestions: [String] = []
+
+        if errorMessage.contains("context") || errorMessage.contains("token") || errorMessage.contains("exceeded") || errorMessage.contains("window") {
+            cause = .contextWindowExceeded
+            suggestions = [
+                "Reduce the length of your prompt",
+                "Start a new session to reset the context",
+                "Summarize previous conversation before continuing"
+            ]
+        } else if errorMessage.contains("guardrail") || errorMessage.contains("safety") || errorMessage.contains("blocked") {
+            cause = .guardrailViolation
+            suggestions = [
+                "Rephrase your request to avoid triggering safety filters",
+                "Remove potentially sensitive content from the prompt"
+            ]
+        } else if errorMessage.contains("refused") || errorMessage.contains("cannot") || errorMessage.contains("refusal") {
+            cause = .contentRefused
+            suggestions = [
+                "The model cannot fulfill this type of request",
+                "Try rephrasing or asking for something different"
+            ]
+        } else if errorMessage.contains("language") || errorMessage.contains("locale") {
+            cause = .unsupportedLanguage
+            suggestions = [
+                "Use a supported language (English, etc.)",
+                "Check your device's language settings"
+            ]
+        } else if errorMessage.contains("session") {
+            if errorMessage.contains("expired") || errorMessage.contains("timeout") {
+                cause = .sessionExpired
+            } else if errorMessage.contains("invalid") {
+                cause = .sessionInvalidated
+            }
+            suggestions = [
+                "Create a new session and try again",
+                "Sessions may expire after periods of inactivity"
+            ]
+        } else if errorMessage.contains("not available") || errorMessage.contains("unavailable") {
+            if errorMessage.contains("device") || errorMessage.contains("eligible") {
+                cause = .deviceNotEligible
+                suggestions = [
+                    "Apple Intelligence requires iPhone 15 Pro or later, or M1+ Mac"
+                ]
+            } else if errorMessage.contains("intelligence") || errorMessage.contains("enabled") || errorMessage.contains("settings") {
+                cause = .appleIntelligenceDisabled
+                suggestions = [
+                    "Enable Apple Intelligence in Settings > Apple Intelligence & Siri"
+                ]
+            } else if errorMessage.contains("download") || errorMessage.contains("ready") {
+                cause = .modelNotDownloaded
+                suggestions = [
+                    "Wait for the on-device model to finish downloading",
+                    "Ensure device has sufficient storage space"
+                ]
+            }
+        } else if errorMessage.contains("too long") || errorMessage.contains("input") && errorMessage.contains("limit") {
+            cause = .inputTooLong
+            suggestions = [
+                "Shorten your prompt",
+                "Split your request into smaller parts"
+            ]
+        }
+
+        return (cause, suggestions)
+    }
+
+    /// Gather device info for diagnostics
+    func gatherDeviceInfo() -> DeviceInfoDiagnostics {
+        return DeviceInfoDiagnostics(
+            model: getDeviceModel(),
+            osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+            hasNeuralEngine: checkNeuralEngineAvailability(),
+            availableMemoryMB: getAvailableMemoryMB()
+        )
+    }
+
+    /// Gather device eligibility diagnostics for Foundation Models
+    func gatherDeviceEligibility() -> DeviceEligibilityDiagnostics {
+        return DeviceEligibilityDiagnostics(
+            deviceModel: getDeviceModel(),
+            osVersion: ProcessInfo.processInfo.operatingSystemVersionString,
+            requiredOSVersion: "iOS 26.0+",
+            appleIntelligenceEnabled: nil, // Would need to check system settings
+            modelDownloaded: nil // Would need to check model status
+        )
+    }
+
+    private func getDeviceModel() -> String {
+        var systemInfo = utsname()
+        uname(&systemInfo)
+        let machineMirror = Mirror(reflecting: systemInfo.machine)
+        return machineMirror.children.reduce("") { identifier, element in
+            guard let value = element.value as? Int8, value != 0 else { return identifier }
+            return identifier + String(UnicodeScalar(UInt8(value)))
+        }
+    }
+
+    private func checkNeuralEngineAvailability() -> Bool {
+        let model = getDeviceModel()
+        // A12 Bionic and later have Neural Engine (iPhone XS/XR and later)
+        // This is a simplified check based on device identifier patterns
+        if model.contains("iPhone") {
+            // iPhone11,x (XS/XR) and later have Neural Engine
+            if let range = model.range(of: "iPhone"),
+               let numberStart = model.index(range.upperBound, offsetBy: 0, limitedBy: model.endIndex),
+               let commaIndex = model.firstIndex(of: ","),
+               let majorVersion = Int(model[numberStart..<commaIndex]) {
+                return majorVersion >= 11
+            }
+        } else if model.contains("iPad") {
+            // iPad8,x (Pro 2018) and later have Neural Engine
+            if let range = model.range(of: "iPad"),
+               let numberStart = model.index(range.upperBound, offsetBy: 0, limitedBy: model.endIndex),
+               let commaIndex = model.firstIndex(of: ","),
+               let majorVersion = Int(model[numberStart..<commaIndex]) {
+                return majorVersion >= 8
+            }
+        }
+        // Mac with Apple Silicon (arm64) has Neural Engine
+        #if arch(arm64)
+        if model.contains("Mac") || model.contains("arm64") {
+            return true
+        }
+        #endif
+        return false
+    }
+
+    private func getAvailableMemoryMB() -> Int {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+
+        let kerr: kern_return_t = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: 1) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+
+        if kerr == KERN_SUCCESS {
+            let totalMB = Int(ProcessInfo.processInfo.physicalMemory / 1024 / 1024)
+            let usedMB = Int(info.resident_size / 1024 / 1024)
+            return max(0, totalMB - usedMB)
+        }
+        return 0
     }
 }
 
@@ -509,6 +1290,134 @@ final class FoundationModelsManager: @unchecked Sendable {
             "reason": "platformNotSupported"
         ]
     }
+
+    /// Get detailed availability diagnostics with root cause and suggestions
+    func getAvailabilityDiagnostics() -> [String: Any] {
+        var diagnostics: [String: Any] = [
+            "deviceModel": ErrorAnalyzer.shared.gatherDeviceInfo().model,
+            "osVersion": ProcessInfo.processInfo.operatingSystemVersionString,
+            "requiredOSVersion": "iOS 26.0+",
+            "timestamp": ISO8601DateFormatter().string(from: Date())
+        ]
+
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            let model = SystemLanguageModel.default
+
+            switch model.availability {
+            case .available:
+                diagnostics["isAvailable"] = true
+                diagnostics["status"] = "available"
+
+            case .unavailable(.deviceNotEligible):
+                diagnostics["isAvailable"] = false
+                diagnostics["status"] = "unavailable"
+                diagnostics["cause"] = FoundationModelsErrorCause.deviceNotEligible.rawValue
+                diagnostics["causeExplanation"] = FoundationModelsErrorCause.deviceNotEligible.explanation
+                diagnostics["suggestions"] = [
+                    "Apple Intelligence requires iPhone 15 Pro or later, or M1+ Mac",
+                    "Check device compatibility at apple.com/apple-intelligence"
+                ]
+
+            case .unavailable(.appleIntelligenceNotEnabled):
+                diagnostics["isAvailable"] = false
+                diagnostics["status"] = "unavailable"
+                diagnostics["cause"] = FoundationModelsErrorCause.appleIntelligenceDisabled.rawValue
+                diagnostics["causeExplanation"] = FoundationModelsErrorCause.appleIntelligenceDisabled.explanation
+                diagnostics["suggestions"] = [
+                    "Go to Settings > Apple Intelligence & Siri",
+                    "Enable Apple Intelligence and wait for setup to complete"
+                ]
+
+            case .unavailable(.modelNotReady):
+                diagnostics["isAvailable"] = false
+                diagnostics["status"] = "unavailable"
+                diagnostics["cause"] = FoundationModelsErrorCause.modelNotDownloaded.rawValue
+                diagnostics["causeExplanation"] = FoundationModelsErrorCause.modelNotDownloaded.explanation
+                diagnostics["suggestions"] = [
+                    "Wait for the on-device model to finish downloading",
+                    "Ensure device has sufficient storage space (at least 4GB free)",
+                    "Connect to Wi-Fi for faster download"
+                ]
+
+            case .unavailable(let reason):
+                diagnostics["isAvailable"] = false
+                diagnostics["status"] = "unavailable"
+                diagnostics["cause"] = FoundationModelsErrorCause.unknown.rawValue
+                diagnostics["causeExplanation"] = String(describing: reason)
+                diagnostics["rawReason"] = String(describing: reason)
+            }
+        } else {
+            diagnostics["isAvailable"] = false
+            diagnostics["status"] = "unavailable"
+            diagnostics["cause"] = FoundationModelsErrorCause.unsupportedOSVersion.rawValue
+            diagnostics["causeExplanation"] = FoundationModelsErrorCause.unsupportedOSVersion.explanation
+            diagnostics["suggestions"] = [
+                "Update to iOS 26 or later"
+            ]
+        }
+        #else
+        diagnostics["isAvailable"] = false
+        diagnostics["status"] = "unavailable"
+        diagnostics["cause"] = "platformNotSupported"
+        diagnostics["causeExplanation"] = "Foundation Models is only available on iOS/macOS"
+        #endif
+
+        return diagnostics
+    }
+
+    /// Get session diagnostics including context window usage
+    func getSessionDiagnostics(sessionId: String) throws -> [String: Any] {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, macOS 26.0, *) {
+            let session = try getSession(sessionId)
+
+            // Estimate token usage from transcript
+            let transcript = session.transcript
+            var estimatedTokens = 0
+            for entry in transcript {
+                let content = extractTranscriptContent(entry)
+                // Rough token estimation: ~4 characters per token
+                estimatedTokens += content.count / 4
+            }
+
+            // Approximate max tokens (actual limit may vary)
+            let maxTokens = 4096
+            let remainingTokens = max(0, maxTokens - estimatedTokens)
+
+            return [
+                "sessionId": sessionId,
+                "contextWindow": [
+                    "estimatedUsedTokens": estimatedTokens,
+                    "maxTokens": maxTokens,
+                    "remainingTokens": remainingTokens
+                ],
+                "transcriptEntryCount": transcript.count,
+                "timestamp": ISO8601DateFormatter().string(from: Date())
+            ]
+        }
+        #endif
+        throw FoundationModelsManagerError.notAvailable
+    }
+
+    /// Helper to extract content from transcript entry
+    #if canImport(FoundationModels)
+    @available(iOS 26.0, macOS 26.0, *)
+    private func extractTranscriptContent(_ entry: Transcript.Entry) -> String {
+        let mirror = Mirror(reflecting: entry)
+        guard let child = mirror.children.first else {
+            return ""
+        }
+
+        let valueMirror = Mirror(reflecting: child.value)
+        for property in valueMirror.children {
+            if let label = property.label, (label == "content" || label == "text") {
+                return String(describing: property.value)
+            }
+        }
+        return ""
+    }
+    #endif
 
     /// Create a new session
     func createSessionAsync(instructions: String?) async throws -> String {
@@ -1777,6 +2686,16 @@ public class ExpoFoundationModelsModule: Module {
             return CoreMLManager.shared.getLoadedModels()
         }
 
+        // MARK: - CoreML Diagnostics Functions
+
+        AsyncFunction("getModelDiagnostics") { (modelId: String) -> [String: Any] in
+            return try CoreMLManager.shared.getModelDiagnostics(modelId: modelId)
+        }
+
+        AsyncFunction("validateModelInput") { (modelId: String, input: [String: Any]) -> [String: Any] in
+            return try CoreMLManager.shared.validateModelInput(modelId: modelId, input: input)
+        }
+
         // MARK: - Foundation Models Functions
 
         Function("isAvailable") { () -> Bool in
@@ -1785,6 +2704,16 @@ public class ExpoFoundationModelsModule: Module {
 
         Function("getAvailability") { () -> [String: Any] in
             return FoundationModelsManager.shared.getAvailability()
+        }
+
+        // MARK: - Foundation Models Diagnostics Functions
+
+        Function("getAvailabilityDiagnostics") { () -> [String: Any] in
+            return FoundationModelsManager.shared.getAvailabilityDiagnostics()
+        }
+
+        AsyncFunction("getSessionDiagnostics") { (sessionId: String) -> [String: Any] in
+            return try FoundationModelsManager.shared.getSessionDiagnostics(sessionId: sessionId)
         }
 
         AsyncFunction("createSession") { (instructions: String?) -> String in

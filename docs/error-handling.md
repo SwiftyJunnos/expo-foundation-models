@@ -1,10 +1,12 @@
 # Error Handling
 
-Handle errors gracefully in your Foundation Models and CoreML integrations.
+Handle errors gracefully in your Foundation Models and CoreML integrations with detailed root cause analysis and diagnostics.
 
 ## Error Classes
 
 ### FoundationModelsError
+
+Enhanced error class with root cause analysis and actionable suggestions:
 
 ```typescript
 import { FoundationModelsError } from 'expo-foundation-models';
@@ -13,14 +15,23 @@ try {
   await FoundationModels.respond(sessionId, prompt);
 } catch (error) {
   if (error instanceof FoundationModelsError) {
+    // Basic error info
     console.error('Type:', error.type);
     console.error('Message:', error.message);
     console.error('Code:', error.code);
+
+    // Enhanced diagnostics (NEW)
+    console.error('Root Cause:', error.cause);
+    console.error('Explanation:', error.getCauseExplanation());
+    console.error('Suggestions:', error.suggestions);
+    console.error('Diagnostics:', error.diagnostics);
   }
 }
 ```
 
 ### CoreMLError
+
+Enhanced error class with detailed diagnostics for model issues:
 
 ```typescript
 import { CoreMLError } from 'expo-foundation-models';
@@ -29,11 +40,51 @@ try {
   await CoreML.loadModel('MyModel');
 } catch (error) {
   if (error instanceof CoreMLError) {
+    // Basic error info
     console.error('Message:', error.message);
     console.error('Code:', error.code);
+
+    // Enhanced diagnostics (NEW)
+    console.error('Root Cause:', error.cause);
+    console.error('Explanation:', error.getCauseExplanation());
+    console.error('Suggestions:', error.suggestions);
+
+    // Check specific error types
+    if (error.isInputShapeIssue()) {
+      console.error('Input shape diagnostics:', error.diagnostics?.inputShapes);
+    }
   }
 }
 ```
+
+## Root Cause Analysis
+
+Errors now include a `cause` property that identifies the specific reason for failure:
+
+### Foundation Models Error Causes
+
+| Cause | Description |
+|-------|-------------|
+| `deviceNotEligible` | Device doesn't support Apple Intelligence |
+| `appleIntelligenceDisabled` | Apple Intelligence not enabled in Settings |
+| `modelNotDownloaded` | On-device model still downloading |
+| `contextWindowExceeded` | Conversation too long |
+| `inputTooLong` | Prompt exceeds token limit |
+| `guardrailViolation` | Content blocked by safety filters |
+| `contentRefused` | Model refused the request |
+| `sessionExpired` | Session timed out |
+| `unsupportedLanguage` | Language not supported |
+
+### CoreML Error Causes
+
+| Cause | Description |
+|-------|-------------|
+| `computeUnitIncompatible` | Required compute unit not available |
+| `fileNotFound` | Model file missing from bundle |
+| `insufficientMemory` | Not enough memory to load model |
+| `inputShapeMismatch` | Input dimensions don't match |
+| `dataTypeMismatch` | Wrong input data type |
+| `missingFeature` | Required input not provided |
 
 ## Foundation Models Error Types
 
@@ -331,6 +382,91 @@ function ChatComponent() {
 }
 ```
 
+## Diagnostics API
+
+Use the diagnostics API to proactively check for issues and get detailed information:
+
+### Foundation Models Diagnostics
+
+```typescript
+// Get detailed availability diagnostics
+const diag = FoundationModels.diagnostics.getAvailability();
+if (!diag.isAvailable) {
+  console.log('Cause:', diag.cause);
+  console.log('Explanation:', diag.causeExplanation);
+  console.log('Suggestions:', diag.suggestions);
+  // e.g., cause: 'appleIntelligenceDisabled'
+  //       suggestions: ['Go to Settings > Apple Intelligence & Siri']
+}
+
+// Get session diagnostics including context window usage
+const session = await FoundationModels.diagnostics.getSession(sessionId);
+console.log(`Token usage: ${session.contextWindow.estimatedUsedTokens}/${session.contextWindow.maxTokens}`);
+if (session.contextWindow.remainingTokens < 500) {
+  console.log('Warning: Running low on context window');
+}
+
+// Analyze any error for enhanced information
+try {
+  await FoundationModels.respond(sessionId, prompt);
+} catch (error) {
+  const analysis = FoundationModels.diagnostics.analyzeError(error);
+  console.log('Root cause:', analysis.cause);
+  console.log('Explanation:', analysis.explanation);
+  console.log('Suggestions:', analysis.suggestions);
+}
+```
+
+### CoreML Diagnostics
+
+```typescript
+// Get model diagnostics
+const modelDiag = await CoreML.diagnostics.getModel(modelId);
+console.log('Input features:', modelDiag.inputFeatures);
+console.log('Output features:', modelDiag.outputFeatures);
+console.log('Device info:', modelDiag.deviceInfo);
+
+// Validate input before prediction (catch errors early)
+const validation = await CoreML.diagnostics.validateInput(modelId, input);
+if (!validation.isValid) {
+  console.log('Issues found:');
+  for (const issue of validation.issues) {
+    console.log(`- ${issue.featureName}: ${issue.issue}`);
+    if (issue.expectedShape && issue.receivedShape) {
+      console.log(`  Expected shape: ${issue.expectedShape}, got: ${issue.receivedShape}`);
+    }
+  }
+  console.log('Suggestions:', validation.suggestions);
+}
+```
+
+## Error Helper Methods
+
+### FoundationModelsError Methods
+
+```typescript
+error.isGuardrailViolation()     // Content blocked by safety
+error.isRefusal()                // Model refused request
+error.isContextWindowExceeded()  // Too many tokens
+error.isDeviceEligibilityIssue() // Device can't run AI
+error.isModelAvailabilityIssue() // Model not downloaded
+error.isSessionIssue()           // Session expired/invalid
+error.getCauseExplanation()      // Human-readable cause
+error.toJSON()                   // Serialize for logging
+```
+
+### CoreMLError Methods
+
+```typescript
+error.isComputeUnitIssue()  // GPU/Neural Engine not available
+error.isInputShapeIssue()   // Wrong input dimensions
+error.isMemoryIssue()       // Not enough memory
+error.isModelNotFound()     // Model file missing
+error.isDataTypeIssue()     // Wrong input types
+error.getCauseExplanation() // Human-readable cause
+error.toJSON()              // Serialize for logging
+```
+
 ## Logging Errors
 
 ```typescript
@@ -340,15 +476,34 @@ function logError(error: unknown, context: Record<string, unknown>) {
       type: error.type,
       message: error.message,
       code: error.code,
+      cause: error.cause,
+      causeExplanation: error.getCauseExplanation(),
+      suggestions: error.suggestions,
+      diagnostics: error.diagnostics,
       refusalExplanation: error.refusalExplanation,
       context: error.context,
       ...context,
     });
-    
+
     // Send to your logging service
     errorReporter.captureException(error, {
-      tags: { errorType: error.type },
-      extra: context,
+      tags: { errorType: error.type, cause: error.cause },
+      extra: { ...context, suggestions: error.suggestions },
+    });
+  } else if (error instanceof CoreMLError) {
+    console.error('CoreML Error:', {
+      message: error.message,
+      code: error.code,
+      cause: error.cause,
+      causeExplanation: error.getCauseExplanation(),
+      suggestions: error.suggestions,
+      diagnostics: error.diagnostics,
+      ...context,
+    });
+
+    errorReporter.captureException(error, {
+      tags: { cause: error.cause },
+      extra: { ...context, suggestions: error.suggestions },
     });
   } else {
     console.error('Unknown Error:', error);
