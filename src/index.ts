@@ -38,6 +38,19 @@ import type {
   FeedbackOptions,
   FeedbackResult,
   LocaleInfo,
+  // Error diagnostics types
+  CoreMLErrorCause,
+  FoundationModelsErrorCause,
+  DeviceInfo,
+  ModelFeatureInfo,
+  InputValidationIssue,
+  CoreMLModelDiagnostics,
+  InputValidationResult,
+  ContextWindowDiagnostics,
+  SessionDiagnostics,
+  AvailabilityDiagnostics,
+  CoreMLDiagnostics,
+  FoundationModelsDiagnostics,
 } from './ExpoFoundationModels.types';
 
 export type {
@@ -78,6 +91,19 @@ export type {
   FeedbackOptions,
   FeedbackResult,
   LocaleInfo,
+  // Error diagnostics types
+  CoreMLErrorCause,
+  FoundationModelsErrorCause,
+  DeviceInfo,
+  ModelFeatureInfo,
+  InputValidationIssue,
+  CoreMLModelDiagnostics,
+  InputValidationResult,
+  ContextWindowDiagnostics,
+  SessionDiagnostics,
+  AvailabilityDiagnostics,
+  CoreMLDiagnostics,
+  FoundationModelsDiagnostics,
 };
 
 // MARK: - Validation Helpers
@@ -88,7 +114,7 @@ export type {
  */
 function assertIOSForCoreML(): void {
   if (Platform.OS !== 'ios') {
-    throw new CoreMLError('CoreML is only available on iOS', 'PLATFORM_NOT_SUPPORTED');
+    throw new CoreMLError('CoreML is only available on iOS', { code: 'PLATFORM_NOT_SUPPORTED' });
   }
 }
 
@@ -179,19 +205,160 @@ function assertNonEmptyString(value: unknown, name: string, errorType: Generatio
 
 /**
  * Error thrown when CoreML operations fail.
+ *
+ * Provides detailed diagnostic information about the root cause of the error
+ * and actionable suggestions for resolution.
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   await CoreML.predict(modelId, input);
+ * } catch (error) {
+ *   if (error instanceof CoreMLError) {
+ *     console.log('Root cause:', error.cause);
+ *     console.log('Suggestions:', error.suggestions);
+ *     if (error.isInputShapeIssue()) {
+ *       console.log('Input shape diagnostics:', error.diagnostics?.inputShapes);
+ *     }
+ *   }
+ * }
+ * ```
  */
 export class CoreMLError extends Error {
+  /** Error code for backward compatibility */
+  public readonly code?: string;
+
+  /** Root cause of the error */
+  public readonly cause?: CoreMLErrorCause;
+
+  /** Detailed diagnostic information */
+  public readonly diagnostics?: CoreMLDiagnostics;
+
+  /** Actionable suggestions to resolve the error */
+  public readonly suggestions: string[];
+
   constructor(
     message: string,
-    public readonly code?: string
+    options?: {
+      code?: string;
+      cause?: CoreMLErrorCause;
+      diagnostics?: CoreMLDiagnostics;
+      suggestions?: string[];
+    }
   ) {
     super(message);
     this.name = 'CoreMLError';
+    this.code = options?.code;
+    this.cause = options?.cause;
+    this.diagnostics = options?.diagnostics;
+    this.suggestions = options?.suggestions ?? [];
+  }
+
+  /**
+   * Get a human-readable explanation of the root cause.
+   */
+  getCauseExplanation(): string {
+    return getCoreMLCauseExplanation(this.cause);
+  }
+
+  /**
+   * Check if error is due to compute unit incompatibility.
+   */
+  isComputeUnitIssue(): boolean {
+    return this.cause === 'computeUnitIncompatible';
+  }
+
+  /**
+   * Check if error is due to input shape mismatch.
+   */
+  isInputShapeIssue(): boolean {
+    return this.cause === 'inputShapeMismatch';
+  }
+
+  /**
+   * Check if error is due to insufficient memory.
+   */
+  isMemoryIssue(): boolean {
+    return this.cause === 'insufficientMemory' || this.cause === 'memoryAllocationFailed';
+  }
+
+  /**
+   * Check if error is due to model not found.
+   */
+  isModelNotFound(): boolean {
+    return this.cause === 'fileNotFound';
+  }
+
+  /**
+   * Check if error is due to data type mismatch.
+   */
+  isDataTypeIssue(): boolean {
+    return this.cause === 'dataTypeMismatch';
+  }
+
+  /**
+   * Convert to a plain object for logging/serialization.
+   */
+  toJSON(): {
+    message: string;
+    code?: string;
+    cause?: CoreMLErrorCause;
+    causeExplanation: string;
+    diagnostics?: CoreMLDiagnostics;
+    suggestions: string[];
+  } {
+    return {
+      message: this.message,
+      code: this.code,
+      cause: this.cause,
+      causeExplanation: this.getCauseExplanation(),
+      diagnostics: this.diagnostics,
+      suggestions: this.suggestions,
+    };
+  }
+}
+
+/**
+ * Get a human-readable explanation for a CoreML error cause.
+ */
+function getCoreMLCauseExplanation(cause?: CoreMLErrorCause): string {
+  switch (cause) {
+    case 'computeUnitIncompatible':
+      return 'The model requires compute units (Neural Engine, GPU) not available on this device.';
+    case 'fileCorrupted':
+      return 'The model file appears to be corrupted or incomplete.';
+    case 'fileNotFound':
+      return 'The model file was not found in the app bundle.';
+    case 'insufficientMemory':
+      return 'There is not enough memory available to load the model.';
+    case 'unsupportedOperation':
+      return 'The model contains operations not supported on this device or iOS version.';
+    case 'modelVersionMismatch':
+      return 'The model was compiled for a different CoreML version.';
+    case 'compilationRequired':
+      return 'The model needs to be compiled (.mlmodelc) before use.';
+    case 'inputShapeMismatch':
+      return 'The input data shape does not match what the model expects.';
+    case 'missingFeature':
+      return 'A required input feature was not provided.';
+    case 'dataTypeMismatch':
+      return 'The input data type does not match what the model expects.';
+    case 'numericOverflow':
+      return 'A numeric value exceeded the allowed range.';
+    case 'invalidInputValue':
+      return 'An input value is invalid (NaN, Infinity, or out of range).';
+    case 'memoryAllocationFailed':
+      return 'Failed to allocate memory for the prediction.';
+    default:
+      return 'An unknown error occurred.';
   }
 }
 
 /**
  * Error thrown when Foundation Models operations fail.
+ *
+ * Provides detailed diagnostic information about the root cause of the error
+ * and actionable suggestions for resolution.
  *
  * @example
  * ```typescript
@@ -199,13 +366,16 @@ export class CoreMLError extends Error {
  *   await FoundationModels.respond(sessionId, prompt);
  * } catch (error) {
  *   if (error instanceof FoundationModelsError) {
- *     switch (error.type) {
- *       case 'guardrailViolation':
- *         console.log('Content blocked by safety filters');
- *         break;
- *       case 'refusal':
- *         console.log('Model refused:', error.refusalExplanation);
- *         break;
+ *     console.log('Error type:', error.type);
+ *     console.log('Root cause:', error.cause);
+ *     console.log('Suggestions:', error.suggestions);
+ *
+ *     if (error.isGuardrailViolation()) {
+ *       console.log('Content blocked by safety filters');
+ *     } else if (error.isContextWindowExceeded()) {
+ *       console.log('Context window exceeded - start a new session');
+ *     } else if (error.isDeviceEligibilityIssue()) {
+ *       console.log('Device eligibility:', error.diagnostics?.deviceEligibility);
  *     }
  *   }
  * }
@@ -224,6 +394,15 @@ export class FoundationModelsError extends Error {
   /** Legacy error code (for backward compatibility) */
   public readonly code?: string;
 
+  /** Root cause of the error */
+  public readonly cause?: FoundationModelsErrorCause;
+
+  /** Detailed diagnostic information */
+  public readonly diagnostics?: FoundationModelsDiagnostics;
+
+  /** Actionable suggestions to resolve the error */
+  public readonly suggestions: string[];
+
   constructor(
     message: string,
     options?: {
@@ -231,6 +410,9 @@ export class FoundationModelsError extends Error {
       code?: string;
       refusalExplanation?: string;
       context?: string;
+      cause?: FoundationModelsErrorCause;
+      diagnostics?: FoundationModelsDiagnostics;
+      suggestions?: string[];
     }
   ) {
     super(message);
@@ -239,26 +421,113 @@ export class FoundationModelsError extends Error {
     this.code = options?.code;
     this.refusalExplanation = options?.refusalExplanation;
     this.context = options?.context;
+    this.cause = options?.cause;
+    this.diagnostics = options?.diagnostics;
+    this.suggestions = options?.suggestions ?? [];
+  }
+
+  /**
+   * Get a human-readable explanation of the root cause.
+   */
+  getCauseExplanation(): string {
+    return getFoundationModelsCauseExplanation(this.cause);
   }
 
   /** Check if this is a guardrail violation error */
   isGuardrailViolation(): boolean {
-    return this.type === 'guardrailViolation';
+    return this.type === 'guardrailViolation' || this.cause === 'guardrailViolation';
   }
 
   /** Check if this is a refusal error */
   isRefusal(): boolean {
-    return this.type === 'refusal';
+    return this.type === 'refusal' || this.cause === 'contentRefused';
+  }
+
+  /**
+   * Check if error is due to context window being exceeded.
+   */
+  isContextWindowExceeded(): boolean {
+    return this.cause === 'contextWindowExceeded' || this.cause === 'inputTooLong';
+  }
+
+  /**
+   * Check if error is a device eligibility issue.
+   */
+  isDeviceEligibilityIssue(): boolean {
+    return this.cause === 'deviceNotEligible' || this.cause === 'appleIntelligenceDisabled';
+  }
+
+  /**
+   * Check if error is a model availability issue.
+   */
+  isModelAvailabilityIssue(): boolean {
+    return this.cause === 'modelNotDownloaded' || this.cause === 'modelDownloading';
+  }
+
+  /**
+   * Check if error is a session issue.
+   */
+  isSessionIssue(): boolean {
+    return this.cause === 'sessionExpired' || this.cause === 'sessionInvalidated';
   }
 
   /** Convert to a plain object for serialization */
-  toJSON(): GenerationErrorInfo {
+  toJSON(): GenerationErrorInfo & {
+    cause?: FoundationModelsErrorCause;
+    causeExplanation: string;
+    diagnostics?: FoundationModelsDiagnostics;
+    suggestions: string[];
+  } {
     return {
       type: this.type,
       message: this.message,
       refusalExplanation: this.refusalExplanation,
       context: this.context,
+      cause: this.cause,
+      causeExplanation: this.getCauseExplanation(),
+      diagnostics: this.diagnostics,
+      suggestions: this.suggestions,
     };
+  }
+}
+
+/**
+ * Get a human-readable explanation for a Foundation Models error cause.
+ */
+function getFoundationModelsCauseExplanation(cause?: FoundationModelsErrorCause): string {
+  switch (cause) {
+    case 'deviceNotEligible':
+      return 'This device does not support Apple Intelligence. Requires iPhone 15 Pro or newer, or M1+ Mac.';
+    case 'appleIntelligenceDisabled':
+      return 'Apple Intelligence is not enabled. Enable it in Settings > Apple Intelligence & Siri.';
+    case 'modelNotDownloaded':
+      return 'The on-device model has not been downloaded yet.';
+    case 'modelDownloading':
+      return 'The on-device model is currently downloading.';
+    case 'unsupportedRegion':
+      return 'Apple Intelligence is not available in this region.';
+    case 'unsupportedOSVersion':
+      return 'This feature requires iOS 26 or later.';
+    case 'contextWindowExceeded':
+      return 'The conversation exceeded the maximum context window size.';
+    case 'inputTooLong':
+      return 'The input prompt is too long for the model to process.';
+    case 'outputTruncated':
+      return 'The response was truncated due to token limits.';
+    case 'unsupportedLanguage':
+      return 'The requested language is not supported by the model.';
+    case 'guardrailViolation':
+      return 'The content was blocked by safety filters.';
+    case 'contentRefused':
+      return 'The model refused to generate the requested content.';
+    case 'sessionExpired':
+      return 'The session has expired or timed out.';
+    case 'sessionInvalidated':
+      return 'The session was invalidated due to an error.';
+    case 'concurrencyLimit':
+      return 'Too many concurrent requests. Please wait and try again.';
+    default:
+      return 'An unknown error occurred.';
   }
 }
 
@@ -301,7 +570,7 @@ export const CoreML = {
     } catch (error) {
       throw new CoreMLError(
         `Failed to load model '${modelName}': ${error instanceof Error ? error.message : String(error)}`,
-        'LOAD_FAILED'
+        { code: 'LOAD_FAILED', cause: 'fileNotFound' }
       );
     }
   },
@@ -321,7 +590,7 @@ export const CoreML = {
     } catch (error) {
       throw new CoreMLError(
         `Failed to unload model '${modelId}': ${error instanceof Error ? error.message : String(error)}`,
-        'UNLOAD_FAILED'
+        { code: 'UNLOAD_FAILED' }
       );
     }
   },
@@ -347,7 +616,7 @@ export const CoreML = {
     } catch (error) {
       throw new CoreMLError(
         `Prediction failed: ${error instanceof Error ? error.message : String(error)}`,
-        'PREDICTION_FAILED'
+        { code: 'PREDICTION_FAILED' }
       );
     }
   },
@@ -378,6 +647,80 @@ export const CoreML = {
       return [];
     }
     return ExpoFoundationModelsModule.getLoadedModels();
+  },
+
+  /**
+   * Diagnostics API for CoreML models.
+   * Provides programmatic access to detailed diagnostic information.
+   */
+  diagnostics: {
+    /**
+     * Get detailed diagnostics for a loaded model.
+     *
+     * @param modelId - The model ID to diagnose
+     * @returns Model diagnostic information including input/output features
+     *
+     * @example
+     * ```typescript
+     * const diag = await CoreML.diagnostics.getModel(modelId);
+     * console.log('Input features:', diag.inputFeatures);
+     * console.log('Output features:', diag.outputFeatures);
+     * ```
+     */
+    async getModel(modelId: string): Promise<CoreMLModelDiagnostics> {
+      assertNonEmptyStringForCoreML(modelId, 'Model ID');
+      assertIOSForCoreML();
+
+      try {
+        return (await ExpoFoundationModelsModule.getModelDiagnostics(
+          modelId
+        )) as CoreMLModelDiagnostics;
+      } catch (error) {
+        throw new CoreMLError(
+          `Failed to get model diagnostics: ${error instanceof Error ? error.message : String(error)}`,
+          { code: 'DIAGNOSTICS_FAILED' }
+        );
+      }
+    },
+
+    /**
+     * Validate input before prediction to catch errors early.
+     *
+     * @param modelId - The model to validate against
+     * @param input - The input to validate
+     * @returns Validation result with any issues found
+     *
+     * @example
+     * ```typescript
+     * const validation = await CoreML.diagnostics.validateInput(modelId, input);
+     * if (!validation.isValid) {
+     *   console.log('Issues:', validation.issues);
+     *   console.log('Suggestions:', validation.suggestions);
+     * }
+     * ```
+     */
+    async validateInput(
+      modelId: string,
+      input: MLDictionary
+    ): Promise<InputValidationResult> {
+      assertNonEmptyStringForCoreML(modelId, 'Model ID');
+      if (!input || typeof input !== 'object') {
+        throw new CoreMLError('Input must be an object', { code: 'INVALID_INPUT' });
+      }
+      assertIOSForCoreML();
+
+      try {
+        return (await ExpoFoundationModelsModule.validateModelInput(
+          modelId,
+          input
+        )) as InputValidationResult;
+      } catch (error) {
+        throw new CoreMLError(
+          `Failed to validate input: ${error instanceof Error ? error.message : String(error)}`,
+          { code: 'VALIDATION_FAILED' }
+        );
+      }
+    },
   },
 };
 
@@ -527,6 +870,144 @@ export const FoundationModels = {
         calendar: 'error',
       };
     }
+  },
+
+  /**
+   * Diagnostics API for Foundation Models.
+   * Provides programmatic access to detailed diagnostic information.
+   */
+  diagnostics: {
+    /**
+     * Get detailed availability diagnostics including device eligibility.
+     *
+     * @returns Comprehensive diagnostic information about model availability
+     *
+     * @example
+     * ```typescript
+     * const diag = await FoundationModels.diagnostics.getAvailability();
+     * if (!diag.isAvailable) {
+     *   console.log('Cause:', diag.cause);
+     *   console.log('Explanation:', diag.causeExplanation);
+     *   console.log('Suggestions:', diag.suggestions);
+     * }
+     * ```
+     */
+    getAvailability(): AvailabilityDiagnostics {
+      if (Platform.OS !== 'ios') {
+        return {
+          isAvailable: false,
+          status: 'unavailable',
+          cause: 'unsupportedOSVersion',
+          causeExplanation: 'Foundation Models is only available on iOS',
+          deviceModel: 'unknown',
+          osVersion: Platform.Version?.toString() ?? 'unknown',
+          requiredOSVersion: 'iOS 26.0+',
+          suggestions: ['Use an iOS device with iOS 26 or later'],
+          timestamp: new Date().toISOString(),
+        };
+      }
+      return ExpoFoundationModelsModule.getAvailabilityDiagnostics() as AvailabilityDiagnostics;
+    },
+
+    /**
+     * Get session diagnostics including context window usage.
+     *
+     * @param sessionId - The session to diagnose
+     * @returns Session diagnostic information
+     *
+     * @example
+     * ```typescript
+     * const diag = await FoundationModels.diagnostics.getSession(sessionId);
+     * console.log(`Token usage: ${diag.contextWindow.estimatedUsedTokens}/${diag.contextWindow.maxTokens}`);
+     * if (diag.contextWindow.remainingTokens < 500) {
+     *   console.log('Warning: Running low on context window');
+     * }
+     * ```
+     */
+    async getSession(sessionId: string): Promise<SessionDiagnostics> {
+      assertIOSForFoundationModels();
+      assertSessionId(sessionId);
+
+      try {
+        return (await ExpoFoundationModelsModule.getSessionDiagnostics(
+          sessionId
+        )) as SessionDiagnostics;
+      } catch (error) {
+        throw new FoundationModelsError(
+          `Failed to get session diagnostics: ${error instanceof Error ? error.message : String(error)}`,
+          { type: 'generationFailed', code: 'DIAGNOSTICS_FAILED' }
+        );
+      }
+    },
+
+    /**
+     * Analyze an error and get enhanced diagnostic information.
+     *
+     * @param error - The error to analyze
+     * @returns Enhanced error information with diagnostics and suggestions
+     *
+     * @example
+     * ```typescript
+     * try {
+     *   await FoundationModels.respond(sessionId, prompt);
+     * } catch (error) {
+     *   const analysis = FoundationModels.diagnostics.analyzeError(error);
+     *   console.log('Root cause:', analysis.cause);
+     *   console.log('Explanation:', analysis.explanation);
+     *   console.log('Suggestions:', analysis.suggestions);
+     * }
+     * ```
+     */
+    analyzeError(error: Error): {
+      cause: FoundationModelsErrorCause | CoreMLErrorCause;
+      explanation: string;
+      suggestions: string[];
+      diagnostics?: FoundationModelsDiagnostics | CoreMLDiagnostics;
+    } {
+      if (error instanceof FoundationModelsError) {
+        return {
+          cause: error.cause ?? 'unknown',
+          explanation: error.getCauseExplanation(),
+          suggestions: error.suggestions,
+          diagnostics: error.diagnostics,
+        };
+      }
+      if (error instanceof CoreMLError) {
+        return {
+          cause: error.cause ?? 'unknown',
+          explanation: error.getCauseExplanation(),
+          suggestions: error.suggestions,
+          diagnostics: error.diagnostics,
+        };
+      }
+      // Analyze unknown errors by message pattern
+      const message = error.message.toLowerCase();
+      if (message.includes('guardrail') || message.includes('safety')) {
+        return {
+          cause: 'guardrailViolation',
+          explanation: getFoundationModelsCauseExplanation('guardrailViolation'),
+          suggestions: [
+            'Rephrase your request to avoid triggering safety filters',
+            'Remove potentially sensitive content from the prompt',
+          ],
+        };
+      }
+      if (message.includes('context') || message.includes('token') || message.includes('exceeded')) {
+        return {
+          cause: 'contextWindowExceeded',
+          explanation: getFoundationModelsCauseExplanation('contextWindowExceeded'),
+          suggestions: [
+            'Reduce the length of your prompt',
+            'Start a new session to reset the context',
+          ],
+        };
+      }
+      return {
+        cause: 'unknown',
+        explanation: 'An unknown error occurred.',
+        suggestions: ['Check the error message for more details'],
+      };
+    },
   },
 
   /**
@@ -1265,56 +1746,127 @@ export const FoundationModels = {
 };
 
 /**
- * Parse native error and convert to FoundationModelsError with proper type.
+ * Parse native error and convert to FoundationModelsError with proper type,
+ * root cause, diagnostics, and suggestions.
  */
 function parseNativeError(
   error: unknown,
   fallbackMessage: string,
   fallbackCode: string
 ): FoundationModelsError {
-  if (error instanceof Error) {
-    // Try to extract error type from native error message
-    const message = error.message;
+  // Try to extract structured error info from native layer
+  const nativeInfo = extractNativeErrorInfo(error);
 
-    // Check for known error patterns
-    if (message.includes('guardrail') || message.includes('safety')) {
+  if (error instanceof Error) {
+    const message = error.message;
+    const lowerMessage = message.toLowerCase();
+
+    // Check for known error patterns and map to causes
+    if (lowerMessage.includes('guardrail') || lowerMessage.includes('safety') || lowerMessage.includes('blocked')) {
       return new FoundationModelsError(message, {
         type: 'guardrailViolation',
         code: 'GUARDRAIL_VIOLATION',
+        cause: 'guardrailViolation',
+        context: nativeInfo?.context,
+        diagnostics: nativeInfo?.diagnostics,
+        suggestions: nativeInfo?.suggestions ?? [
+          'Rephrase your request to avoid triggering safety filters',
+          'Remove potentially sensitive content from the prompt',
+        ],
       });
     }
 
-    if (message.includes('refused') || message.includes('refusal')) {
+    if (lowerMessage.includes('refused') || lowerMessage.includes('refusal') || lowerMessage.includes('cannot')) {
       return new FoundationModelsError(message, {
         type: 'refusal',
         code: 'REFUSAL',
+        cause: 'contentRefused',
+        refusalExplanation: nativeInfo?.refusalExplanation,
+        context: nativeInfo?.context,
+        diagnostics: nativeInfo?.diagnostics,
+        suggestions: nativeInfo?.suggestions ?? [
+          'The model cannot fulfill this type of request',
+          'Try rephrasing or asking for something different',
+        ],
       });
     }
 
-    if (message.includes('not available') || message.includes('notAvailable')) {
+    if (lowerMessage.includes('context') || lowerMessage.includes('token') || lowerMessage.includes('exceeded') || lowerMessage.includes('window')) {
+      return new FoundationModelsError(message, {
+        type: 'generationFailed',
+        code: 'CONTEXT_EXCEEDED',
+        cause: 'contextWindowExceeded',
+        diagnostics: nativeInfo?.diagnostics,
+        suggestions: nativeInfo?.suggestions ?? [
+          'Reduce the length of your prompt',
+          'Start a new session to reset the context',
+          'Summarize previous conversation before continuing',
+        ],
+      });
+    }
+
+    if (lowerMessage.includes('not available') || lowerMessage.includes('notavailable') || lowerMessage.includes('unavailable')) {
+      let cause: FoundationModelsErrorCause = 'unknown';
+      if (lowerMessage.includes('device') || lowerMessage.includes('eligible')) {
+        cause = 'deviceNotEligible';
+      } else if (lowerMessage.includes('intelligence') || lowerMessage.includes('enabled') || lowerMessage.includes('settings')) {
+        cause = 'appleIntelligenceDisabled';
+      } else if (lowerMessage.includes('download') || lowerMessage.includes('ready')) {
+        cause = 'modelNotDownloaded';
+      }
       return new FoundationModelsError(message, {
         type: 'notAvailable',
         code: 'NOT_AVAILABLE',
+        cause,
+        diagnostics: nativeInfo?.diagnostics,
+        suggestions: nativeInfo?.suggestions ?? [getFoundationModelsCauseExplanation(cause)],
       });
     }
 
-    if (message.includes('Session not found') || message.includes('sessionNotFound')) {
+    if (lowerMessage.includes('session not found') || lowerMessage.includes('sessionnotfound')) {
       return new FoundationModelsError(message, {
         type: 'sessionNotFound',
         code: 'SESSION_NOT_FOUND',
+        cause: 'sessionExpired',
+        suggestions: nativeInfo?.suggestions ?? [
+          'Create a new session and try again',
+          'Sessions may expire after periods of inactivity',
+        ],
       });
     }
 
-    if (message.includes('unsupported language') || message.includes('locale')) {
+    if (lowerMessage.includes('unsupported language') || lowerMessage.includes('locale')) {
       return new FoundationModelsError(message, {
         type: 'unsupportedLanguage',
         code: 'UNSUPPORTED_LANGUAGE',
+        cause: 'unsupportedLanguage',
+        suggestions: nativeInfo?.suggestions ?? [
+          'Use a supported language (English, etc.)',
+          'Check your device language settings',
+        ],
       });
     }
 
+    if (lowerMessage.includes('too long') || (lowerMessage.includes('input') && lowerMessage.includes('limit'))) {
+      return new FoundationModelsError(message, {
+        type: 'generationFailed',
+        code: 'INPUT_TOO_LONG',
+        cause: 'inputTooLong',
+        suggestions: nativeInfo?.suggestions ?? [
+          'Shorten your prompt',
+          'Split your request into smaller parts',
+        ],
+      });
+    }
+
+    // Use native-provided cause if available, otherwise default to generationFailed
     return new FoundationModelsError(`${fallbackMessage}: ${message}`, {
-      type: 'generationFailed',
+      type: nativeInfo?.type ?? 'generationFailed',
       code: fallbackCode,
+      cause: nativeInfo?.cause,
+      context: nativeInfo?.context,
+      diagnostics: nativeInfo?.diagnostics,
+      suggestions: nativeInfo?.suggestions ?? [],
     });
   }
 
@@ -1322,4 +1874,54 @@ function parseNativeError(
     type: 'unknown',
     code: fallbackCode,
   });
+}
+
+/**
+ * Extract structured error information from native error objects.
+ * Native errors may include additional properties with diagnostic info.
+ */
+function extractNativeErrorInfo(error: unknown): {
+  type?: GenerationErrorType;
+  cause?: FoundationModelsErrorCause;
+  refusalExplanation?: string;
+  context?: string;
+  diagnostics?: FoundationModelsDiagnostics;
+  suggestions?: string[];
+} | null {
+  if (!error || typeof error !== 'object') {
+    return null;
+  }
+
+  const errorObj = error as Record<string, unknown>;
+
+  // Check if error has structured info (from native layer)
+  const result: ReturnType<typeof extractNativeErrorInfo> = {};
+
+  if (typeof errorObj.type === 'string') {
+    result.type = errorObj.type as GenerationErrorType;
+  }
+
+  if (typeof errorObj.cause === 'string') {
+    result.cause = errorObj.cause as FoundationModelsErrorCause;
+  }
+
+  if (typeof errorObj.refusalExplanation === 'string') {
+    result.refusalExplanation = errorObj.refusalExplanation;
+  }
+
+  if (typeof errorObj.context === 'string') {
+    result.context = errorObj.context;
+  }
+
+  if (errorObj.diagnostics && typeof errorObj.diagnostics === 'object') {
+    result.diagnostics = errorObj.diagnostics as FoundationModelsDiagnostics;
+  }
+
+  if (Array.isArray(errorObj.suggestions)) {
+    result.suggestions = errorObj.suggestions.filter(
+      (s): s is string => typeof s === 'string'
+    );
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
 }

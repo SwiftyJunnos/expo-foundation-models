@@ -562,6 +562,222 @@ export type FeedbackResult = {
   feedbackAttachment?: string;
 };
 
+// MARK: - Error Diagnostics Types
+
+/**
+ * Root cause categories for CoreML errors.
+ *
+ * These help identify the specific reason why a CoreML operation failed.
+ */
+export type CoreMLErrorCause =
+  // Load failures
+  | 'computeUnitIncompatible'
+  | 'fileCorrupted'
+  | 'fileNotFound'
+  | 'insufficientMemory'
+  | 'unsupportedOperation'
+  | 'modelVersionMismatch'
+  | 'compilationRequired'
+  // Prediction failures
+  | 'inputShapeMismatch'
+  | 'missingFeature'
+  | 'dataTypeMismatch'
+  | 'numericOverflow'
+  | 'invalidInputValue'
+  | 'memoryAllocationFailed'
+  // General
+  | 'unknown';
+
+/**
+ * Root cause categories for Foundation Models errors.
+ *
+ * These help identify the specific reason why a Foundation Models operation failed.
+ */
+export type FoundationModelsErrorCause =
+  // Availability issues
+  | 'deviceNotEligible'
+  | 'appleIntelligenceDisabled'
+  | 'modelNotDownloaded'
+  | 'modelDownloading'
+  | 'unsupportedRegion'
+  | 'unsupportedOSVersion'
+  // Generation issues
+  | 'contextWindowExceeded'
+  | 'inputTooLong'
+  | 'outputTruncated'
+  | 'unsupportedLanguage'
+  // Safety issues
+  | 'guardrailViolation'
+  | 'contentRefused'
+  // Session issues
+  | 'sessionExpired'
+  | 'sessionInvalidated'
+  | 'concurrencyLimit'
+  // General
+  | 'unknown';
+
+/**
+ * Device information for diagnostics.
+ */
+export type DeviceInfo = {
+  /** Device model identifier (e.g., "iPhone15,2") */
+  model: string;
+  /** OS version string */
+  osVersion: string;
+  /** Whether device has Apple Neural Engine */
+  hasNeuralEngine: boolean;
+  /** Available memory in MB */
+  availableMemoryMB: number;
+};
+
+/**
+ * Input/output feature information for CoreML models.
+ */
+export type ModelFeatureInfo = {
+  /** Feature name */
+  name: string;
+  /** Feature type (e.g., "Double", "MultiArray", "String") */
+  type: string;
+  /** Whether the feature is optional */
+  isOptional?: boolean;
+  /** Shape for array types */
+  shape?: number[];
+  /** Data type for array types */
+  dataType?: string;
+};
+
+/**
+ * Input validation issue from CoreML diagnostics.
+ */
+export type InputValidationIssue = {
+  /** Name of the problematic feature */
+  featureName: string;
+  /** Type of issue (e.g., "missingFeature", "typeMismatch", "shapeMismatch") */
+  issue: string;
+  /** Expected type or shape */
+  expectedType?: string;
+  /** Received type or shape */
+  receivedType?: string;
+  /** Expected shape for arrays */
+  expectedShape?: number[];
+  /** Received shape for arrays */
+  receivedShape?: number[];
+};
+
+/**
+ * CoreML model diagnostics information.
+ */
+export type CoreMLModelDiagnostics = {
+  /** Model ID */
+  modelId: string;
+  /** Model name */
+  modelName: string;
+  /** Whether model is loaded */
+  isLoaded: boolean;
+  /** Input feature descriptions */
+  inputFeatures: ModelFeatureInfo[];
+  /** Output feature descriptions */
+  outputFeatures: ModelFeatureInfo[];
+  /** Device information */
+  deviceInfo: DeviceInfo;
+  /** Timestamp of the diagnostic */
+  timestamp: string;
+};
+
+/**
+ * CoreML input validation result.
+ */
+export type InputValidationResult = {
+  /** Whether the input is valid */
+  isValid: boolean;
+  /** List of validation issues found */
+  issues: InputValidationIssue[];
+  /** Suggestions for fixing the issues */
+  suggestions: string[];
+};
+
+/**
+ * Context window diagnostic information for Foundation Models.
+ */
+export type ContextWindowDiagnostics = {
+  /** Estimated tokens used so far */
+  estimatedUsedTokens: number;
+  /** Maximum tokens allowed */
+  maxTokens: number;
+  /** Remaining tokens available */
+  remainingTokens: number;
+};
+
+/**
+ * Session diagnostics information.
+ */
+export type SessionDiagnostics = {
+  /** Session ID */
+  sessionId: string;
+  /** Context window usage information */
+  contextWindow: ContextWindowDiagnostics;
+  /** Number of entries in the transcript */
+  transcriptEntryCount: number;
+  /** Timestamp of the diagnostic */
+  timestamp: string;
+};
+
+/**
+ * Detailed availability diagnostics with root cause and suggestions.
+ */
+export type AvailabilityDiagnostics = {
+  /** Whether Foundation Models is available */
+  isAvailable: boolean;
+  /** Current status */
+  status: AvailabilityStatus;
+  /** Root cause of unavailability */
+  cause?: FoundationModelsErrorCause | string;
+  /** Human-readable explanation of the cause */
+  causeExplanation?: string;
+  /** Device model identifier */
+  deviceModel: string;
+  /** OS version string */
+  osVersion: string;
+  /** Required OS version */
+  requiredOSVersion: string;
+  /** Actionable suggestions to resolve the issue */
+  suggestions?: string[];
+  /** Raw reason string for unknown causes */
+  rawReason?: string;
+  /** Timestamp of the diagnostic */
+  timestamp: string;
+};
+
+/**
+ * CoreML diagnostics container.
+ */
+export type CoreMLDiagnostics = {
+  /** Model name */
+  modelName?: string;
+  /** Model ID */
+  modelId?: string;
+  /** Device information */
+  deviceInfo?: DeviceInfo;
+  /** Input shape diagnostics (for prediction errors) */
+  inputShapes?: InputValidationIssue[];
+  /** Timestamp of the diagnostic */
+  timestamp: string;
+};
+
+/**
+ * Foundation Models diagnostics container.
+ */
+export type FoundationModelsDiagnostics = {
+  /** Session ID */
+  sessionId?: string;
+  /** Context window usage */
+  contextWindow?: ContextWindowDiagnostics;
+  /** Device eligibility details */
+  deviceEligibility?: AvailabilityDiagnostics;
+  /** Timestamp of the diagnostic */
+  timestamp: string;
+};
+
 /**
  * Device locale information for debugging language support issues.
  */
