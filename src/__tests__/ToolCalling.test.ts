@@ -438,6 +438,33 @@ describe('FoundationModels - Tool Calling', () => {
       expect(result).toEqual(mockFinalResponse);
     });
 
+    it('should deliver a valid native tool call event through the facade callback', async () => {
+      const mockFinalResponse = { type: 'text' as const, content: 'Done' };
+      mockModule.streamWithTools.mockResolvedValue(mockFinalResponse);
+
+      const toolCall = { id: 'call-1', name: 'getWeather', arguments: { city: 'Seoul' } };
+      const onToken = jest.fn();
+      const onToolCall = jest.fn();
+
+      const pending = FoundationModels.streamWithTools('session-123', "What's the weather?", {
+        onToken,
+        onToolCall,
+      });
+
+      // The facade registers listeners synchronously before awaiting the native call.
+      const handler = mockModule.addListener.mock.calls.find((call) => call[0] === 'onToolCall')?.[1] as
+        | ((event: { sessionId: string; toolCall: typeof toolCall }) => void)
+        | undefined;
+      expect(handler).toBeDefined();
+
+      handler!({ sessionId: 'session-123', toolCall });
+      const result = await pending;
+
+      expect(onToolCall).toHaveBeenCalledTimes(1);
+      expect(onToolCall).toHaveBeenCalledWith(toolCall);
+      expect(result).toEqual(mockFinalResponse);
+    });
+
     it('should remove listeners after completion', async () => {
       const mockRemove = jest.fn();
       mockModule.addListener.mockReturnValue({ remove: mockRemove });

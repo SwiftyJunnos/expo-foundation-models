@@ -2776,6 +2776,13 @@ final class FoundationModelsManager: @unchecked Sendable {
                     }
                 }
 
+                // Shared success path: a validated tool call emits `onToolCall`
+                // exactly once before being returned, regardless of mode.
+                let finishWithToolCall: (String) throws -> [String: Any] = { toolCall in
+                    let toolCallInfo = try validatedToolCallPayload(toolCall, sessionId: sessionId)
+                    onToolCall(toolCallInfo)
+                    return ["type": "toolCall", "toolCall": toolCallInfo]
+                }
                 switch mode {
                 case .forbidden:
                     // Normal streamed text; never parse or emit a tool call.
@@ -2788,13 +2795,10 @@ final class FoundationModelsManager: @unchecked Sendable {
                             "The model did not return a parsable tool call while 'toolCallingMode' was 'required'"
                         )
                     }
-                    let toolCallInfo = try validatedToolCallPayload(toolCall, sessionId: sessionId)
-                    onToolCall(toolCallInfo)
-                    return ["type": "toolCall", "toolCall": toolCallInfo]
+                    return try finishWithToolCall(toolCall)
                 case .optional:
                     if let toolCall = parseToolCallResponse(fullResponse) {
-                        let toolCallInfo = try validatedToolCallPayload(toolCall, sessionId: sessionId)
-                        return ["type": "toolCall", "toolCall": toolCallInfo]
+                        return try finishWithToolCall(toolCall)
                     }
                     return ["type": "text", "content": fullResponse]
                 }
