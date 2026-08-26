@@ -293,11 +293,18 @@ const response = await FoundationModels.respondWithTools(
 
 ### Modes
 
+Because tool calling is a prompt-driven flow on every OS version, `toolCallingMode`
+shapes **what goes into the prompt** — it never registers an executable native tool:
+
 | Mode | Behavior | Use Case |
 |------|----------|----------|
-| `'allowed'` | Model decides whether to call tools (default) | General assistance |
-| `'required'` | Model must issue a tool call | Guaranteed data-backed answers |
-| `'disallowed'` | Tools hidden from the model | Pure text generation, saving tokens |
+| `'allowed'` (default) | Tool definitions and tool-call instructions are included, but the model may answer in plain text. `respondWithTools` resolves to `{ type: 'text' }` or `{ type: 'toolCall', toolCall }`. | General assistance |
+| `'required'` | The prompt demands exactly one JSON tool call. If the model answers with plain text or unparsable output instead of a tool call, the request rejects with a normalized generation error — you never receive plain text from a `required` request. | Guaranteed data-backed answers |
+| `'disallowed'` | Tool definitions and tool-call instructions are omitted entirely; the model generates a normal text response and can never emit a tool call. Saves prompt tokens for pure-text requests. | Pure text generation |
+
+The same semantics apply to `respondWithTools` and `streamWithTools`. In all modes
+your JavaScript code stays authoritative: execute tools yourself and continue via
+`submitToolResult`; no executable `DynamicTool` is registered natively.
 
 ## Complete Example
 

@@ -56,6 +56,13 @@ Under `#available(iOS 27.0, *)`, schemas are converted **natively**:
 JSON Schema → `DynamicGenerationSchema` → `GenerationSchema`. Output is enforced by the
 framework instead of prompt instructions; the same wire format is preserved.
 
+**Non-string enums:** `GenerationSchema` cannot express enum constraints whose values
+are not strings (numeric, boolean, or mixed enums). Schemas containing such enums
+throw during native conversion and automatically take the iOS 26-style prompt-based
+fallback instead — the enum constraint is preserved via prompt instructions rather
+than silently dropped. The JS facade forwards the schema unchanged; the choice is
+made in native code.
+
 ### Root Schemas and Image Attachments
 
 - **Non-object roots:** Schemas whose root is an array, string, number, boolean, or null
@@ -120,9 +127,17 @@ If you need to use a tool, respond with ONLY:
 
 The tool-calling flow is identical on iOS 27+: the model still returns a JSON tool call,
 JavaScript executes it, and `submitToolResult` continues the conversation. Native tool
-code never fabricates or short-circuits results. The only iOS 27-specific addition is the
-`toolCallingMode` (`'allowed' | 'required' | 'disallowed'`) generation option, which
-rejects with `featureUnavailable` on iOS 26 or earlier.
+code never fabricates or short-circuits results. The only iOS 27-specific addition is
+the `toolCallingMode` (`'allowed' | 'required' | 'disallowed'`) generation option,
+which rejects with `featureUnavailable` on iOS 26 or earlier.
+
+The `toolCallingMode` option shapes the prompt, never registers an executable native
+tool: `'required'` instructs the model to answer with exactly one JSON tool call and
+rejects with a normalized generation error if it produces plain text or unparsable
+output instead; `'disallowed'` omits tool definitions and tool-call instructions so
+the model can only return plain text; `'allowed'` (default) keeps the optional flow.
+The same semantics apply to `respondWithTools` and `streamWithTools`, and
+`submitToolResult` remains the only way to continue generation after a tool call.
 
 ### Remaining Limitations (All OS Versions)
 

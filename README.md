@@ -80,6 +80,11 @@ if (FoundationModels.isAvailable()) {
 
 Use `getFeatures()` to discover which optional capabilities the current device supports,
 and gate new-API usage behind the flags. All flags are `false` on older OS versions.
+On iOS 27+ a flag can still be `false`: each flag reports **actual runtime usability**,
+not just OS presence. `privateCloudCompute` additionally requires an available
+Private Cloud Compute model for the user's Apple Intelligence account/model, and
+`modelVariant` stays `false` because the symbol is absent from the shipped iOS 27 SDK.
+Always branch on the returned booleans — JavaScript cannot re-derive them.
 
 ```typescript
 import { FoundationModels } from 'expo-foundation-models';
@@ -89,7 +94,7 @@ console.log(await FoundationModels.getFeatures());
 // {
 //   osVersion: '27.0',
 //   features: {
-//     privateCloudCompute: true,
+//     privateCloudCompute: true, // iOS 27+ AND a PCC model is available for this Apple Intelligence account
 //     imageAttachments: true,
 //     contextOptions: true,
 //     toolCallingMode: true,
@@ -135,6 +140,10 @@ if (features.features.tokenCounting) {
   const variant = await FoundationModels.getModelVariant();            // reserved — currently null on every OS version
 }
 ```
+>
+> With `toolCallingMode: 'required'` the request fails with a normalized generation
+> error if the model does not produce a tool call; `'disallowed'` omits tool
+> definitions entirely and always returns plain text.
 
 On devices below the minimum OS for a capability, calling the corresponding method
 rejects with error code `featureUnavailable` instead of crashing — always check

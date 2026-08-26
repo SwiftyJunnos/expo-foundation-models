@@ -29,6 +29,13 @@ Generate JSON conforming to schemas or constrain output to specific choices.
 > or earlier, image attachments reject explicitly with error code `featureUnavailable`;
 > images are never silently dropped.
 >
+> **Non-string enums** cannot be expressed safely by the iOS 27 native schema
+> conversion (`GenerationSchema` has no direct representation for numeric/boolean
+> enum values). Schemas containing such enums automatically take the prompt-based
+> fallback on iOS 27 as well — the enum constraint is preserved via prompt
+> instructions instead of being silently dropped. The JS facade forwards your
+> schema unchanged; the native layer decides which path applies.
+>
 > The library selects the path automatically at runtime — check
 > `(await FoundationModels.getFeatures()).osVersion` if you need to know which one applies.
 

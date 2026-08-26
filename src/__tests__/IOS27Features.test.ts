@@ -57,6 +57,30 @@ describe('FoundationModels iOS 27 features', () => {
       expect(result).toEqual({ osVersion: '27.0', features });
     });
 
+    it('should propagate actual false flags on iOS 27 unchanged so callers gate on the returned booleans', async () => {
+      // Native decides runtime usability (e.g. Private Cloud Compute needs an
+      // available PCC model/account; modelVariant is absent from the shipped SDK).
+      // JavaScript cannot re-derive those booleans — it can only read what
+      // getFeatures() returns, so every flag must survive the facade verbatim.
+      const features: FoundationModelsFeatures = {
+        privateCloudCompute: false,
+        imageAttachments: true,
+        contextOptions: true,
+        toolCallingMode: true,
+        tokenCounting: true,
+        modelVariant: false,
+      };
+      mockModule.getFeatures.mockResolvedValue({ osVersion: '27.0', features });
+
+      const result = await FoundationModels.getFeatures();
+
+      expect(result).toEqual({ osVersion: '27.0', features });
+      // Gating pattern from the docs: branch on the returned flags directly.
+      expect(result.features.privateCloudCompute).toBe(false);
+      expect(result.features.modelVariant).toBe(false);
+      expect(result.features.imageAttachments).toBe(true);
+    });
+
     it('should report all features unavailable on non-iOS with the nested fallback shape', async () => {
       platformMock.OS = 'android';
       const result = await FoundationModels.getFeatures();

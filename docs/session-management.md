@@ -128,6 +128,10 @@ const response = await FoundationModels.respond(
 );
 ```
 
+`respondWithChoices` accepts `contextOptions` the same way: the options object is
+forwarded unchanged to the context-aware native response overload on iOS 27
+(and rejected with `featureUnavailable` on iOS 26 or earlier).
+
 ### Reasoning Levels
 
 | Level | Behavior | Use Case |

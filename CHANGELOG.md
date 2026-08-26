@@ -45,6 +45,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native tool calls no longer fabricate results: `DynamicTool` surfaces the prompt-based
   tool-call request to JavaScript and generation continues only through `submitToolResult`
 
+- Feature flags from `getFeatures()` now reflect **actual runtime usability**, not
+  just OS presence: on iOS 27+ `privateCloudCompute` is `true` only when Apple's
+  `PrivateCloudComputeLanguageModel` is available for the user's Apple Intelligence
+  account/model, and `modelVariant` stays `false` on every OS version
+- Prompt-driven `toolCallingMode` semantics applied uniformly to `respondWithTools`
+  and `streamWithTools`: `'required'` demands exactly one JSON tool call and throws
+  a normalized generation error when the model answers with plain text or unparsable
+  output; `'disallowed'` omits tool definitions and tool-call instructions entirely;
+  `'allowed'` (default) keeps the optional flow. No executable `DynamicTool` is
+  registered natively — JavaScript and `submitToolResult` stay authoritative
+- Non-string JSON Schema enums (numeric, boolean, or mixed values) are forwarded to
+  native unchanged; when iOS 27 schema conversion cannot express them safely they
+  throw there so the existing prompt-based fallback preserves the enum constraint
+  instead of silently dropping it
+- `respondWithChoices` forwards `contextOptions` unchanged through the context-aware
+  response overload on iOS 27 (iOS 26 still rejects with `featureUnavailable`)
+
 ### Fixed
 
 - Compile compatibility with the iOS 27 SDK where `LanguageModelSession.GenerationError`,

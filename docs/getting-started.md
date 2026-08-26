@@ -65,14 +65,18 @@ console.log(availability);
 ### Feature Detection
 
 Beyond availability, use `getFeatures()` to check which optional capabilities are
-supported on the current device before using them:
+usable on the current device before using them. Flags reflect **actual runtime
+usability**, not just OS presence: on iOS 27+ a flag can still be `false` —
+`privateCloudCompute` also requires an available Private Cloud Compute model for
+the user's Apple Intelligence account, and `modelVariant` stays `false` because
+the symbol is absent from the shipped iOS 27 SDK.
 
 ```typescript
 const features = await FoundationModels.getFeatures();
 // {
 //   osVersion: '27.0',
 //   features: {
-//     privateCloudCompute: true,   // iOS 27+
+//     privateCloudCompute: true,   // iOS 27+ AND PCC model available for this account
 //     imageAttachments: true,      // iOS 27+
 //     contextOptions: true,        // iOS 27+
 //     toolCallingMode: true,       // iOS 27+
@@ -86,9 +90,10 @@ if (!features.features.privateCloudCompute) {
 }
 ```
 
-All flags are `false` below the minimum OS for that capability. Calling a capability
-gated method without checking still fails safely: it rejects with error code
-`featureUnavailable` rather than crashing.
+All flags are `false` below the minimum OS for that capability, and may also be
+`false` above it when the underlying model is not usable at runtime (see above).
+Calling a capability gated method without checking still fails safely: it rejects
+with error code `featureUnavailable` rather than crashing.
 
 ### Availability Reasons
 

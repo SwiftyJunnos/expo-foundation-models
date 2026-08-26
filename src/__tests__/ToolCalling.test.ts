@@ -197,6 +197,37 @@ describe('FoundationModels - Tool Calling', () => {
         FoundationModelsError
       );
     });
+
+    it('should forward toolCallingMode required unchanged to native', async () => {
+      mockModule.respondWithTools.mockResolvedValue({
+        type: 'toolCall' as const,
+        toolCall: {
+          id: 'call-1',
+          name: 'getWeather',
+          arguments: { city: 'Tokyo' },
+        } as ToolCall,
+      });
+
+      await FoundationModels.respondWithTools('session-123', 'Weather in Tokyo?', {
+        toolCallingMode: 'required',
+      });
+
+      expect(mockModule.respondWithTools).toHaveBeenCalledWith('session-123', 'Weather in Tokyo?', {
+        toolCallingMode: 'required',
+      });
+    });
+
+    it('should forward toolCallingMode disallowed unchanged to native', async () => {
+      mockModule.respondWithTools.mockResolvedValue({ type: 'text' as const, content: 'Sure!' });
+
+      await FoundationModels.respondWithTools('session-123', 'Tell me a joke', {
+        toolCallingMode: 'disallowed',
+      });
+
+      expect(mockModule.respondWithTools).toHaveBeenCalledWith('session-123', 'Tell me a joke', {
+        toolCallingMode: 'disallowed',
+      });
+    });
   });
 
   describe('submitToolResult', () => {
@@ -390,6 +421,24 @@ describe('FoundationModels - Tool Calling', () => {
         FoundationModels.streamWithTools('', 'Hello', { onToken: jest.fn(), onToolCall: jest.fn() })
       ).rejects.toThrow(FoundationModelsError);
     });
+
+    it.each(['required', 'disallowed'] as const)(
+      'should forward toolCallingMode %s unchanged to native',
+      async (mode) => {
+        mockModule.streamWithTools.mockResolvedValue({ type: 'text' as const, content: 'Done' });
+        const callbacks = { onToken: jest.fn(), onToolCall: jest.fn() };
+
+        await FoundationModels.streamWithTools('session-123', "What's the weather?", callbacks, {
+          toolCallingMode: mode,
+        });
+
+        expect(mockModule.streamWithTools).toHaveBeenCalledWith(
+          'session-123',
+          "What's the weather?",
+          { toolCallingMode: mode }
+        );
+      }
+    );
   });
 });
 

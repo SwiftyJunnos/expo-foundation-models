@@ -169,6 +169,34 @@ describe('FoundationModels - Structured Output', () => {
       expect(result.status).toBe('approved');
     });
 
+    it('should pass numeric enum schemas through to native unchanged', async () => {
+      // Native schema conversion decides whether the constraint can be expressed;
+      // the JS facade must never rewrite or drop the enum so the native fallback
+      // (prompt path) still sees the original constraint.
+      const numericEnumSchema: JSONSchema = {
+        type: 'object',
+        properties: {
+          rating: { type: 'integer', enum: [1, 2, 3, 4, 5] },
+        },
+        required: ['rating'],
+      };
+      mockModule.respondWithSchema.mockResolvedValue({ rating: 4 });
+
+      const result = await FoundationModels.respondWithSchema(
+        'session-123',
+        'Rate this from 1 to 5',
+        numericEnumSchema
+      );
+
+      expect(mockModule.respondWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Rate this from 1 to 5',
+        numericEnumSchema,
+        null
+      );
+      expect(result).toEqual({ rating: 4 });
+    });
+
     it('should forward generated scalar roots unchanged', async () => {
       const scalarSchema: JSONSchema = { type: 'integer' };
       mockModule.respondWithSchema.mockResolvedValue(42);
@@ -311,6 +339,29 @@ describe('FoundationModels - Structured Output', () => {
       );
     });
 
+    it('should forward generation options containing contextOptions unchanged', async () => {
+      const choices = ['positive', 'negative', 'neutral'];
+      mockModule.respondWithChoices.mockResolvedValue('positive');
+      const options: GenerationOptions = {
+        temperature: 0.2,
+        contextOptions: { reasoningLevel: 'deep', includeSchemaInPrompt: false },
+      };
+
+      await FoundationModels.respondWithChoices(
+        'session-123',
+        'What is the sentiment of: "I love this product!"',
+        choices,
+        options
+      );
+
+      expect(mockModule.respondWithChoices).toHaveBeenCalledWith(
+        'session-123',
+        'What is the sentiment of: "I love this product!"',
+        choices,
+        options
+      );
+    });
+
     it('should handle numeric choices', async () => {
       const choices = ['1', '2', '3', '4', '5'];
       mockModule.respondWithChoices.mockResolvedValue('4');
@@ -437,6 +488,33 @@ describe('FoundationModels - Structured Output', () => {
 
       expect(mockRemove).toHaveBeenCalled();
     });
+
+    it('should pass numeric enum schemas through to native unchanged while streaming', async () => {
+      const ratingSchema: JSONSchema = {
+        type: 'object',
+        properties: {
+          rating: { type: 'integer', enum: [1, 2, 3, 4, 5] },
+        },
+        required: ['rating'],
+      };
+      mockModule.streamWithSchema.mockResolvedValue({ rating: 3 });
+
+      const result = await FoundationModels.streamWithSchema(
+        'session-123',
+        'Rate this from 1 to 5',
+        ratingSchema,
+        jest.fn()
+      );
+
+      expect(mockModule.streamWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Rate this from 1 to 5',
+        ratingSchema,
+        null
+      );
+      expect(result).toEqual({ rating: 3 });
+    });
+
 
     it('should deliver non-object partials and final results unchanged', async () => {
       const arrayRootSchema: JSONSchema = { type: 'array', items: { type: 'string' } };

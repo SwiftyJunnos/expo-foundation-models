@@ -71,7 +71,11 @@ if (!features.features.privateCloudCompute) {
 }
 ```
 
-- **Availability:** iOS 27.0+. On iOS 26 or earlier the request rejects with error code `featureUnavailable`.
+- **Availability:** iOS 27.0+. The `privateCloudCompute` feature flag reports actual
+  runtime usability: it is `true` only when the OS is iOS 27+ **and** Apple's
+  `PrivateCloudComputeLanguageModel` is available for the user's Apple Intelligence
+  account/model. On iOS 26 or earlier the request rejects with error code
+  `featureUnavailable`.
 - Explicitly pass `{ type: 'system' }` (or omit `model`) for the standard on-device model.
 
 ### Model Variant Info

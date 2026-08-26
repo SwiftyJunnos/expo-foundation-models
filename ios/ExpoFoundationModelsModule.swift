@@ -1232,10 +1232,17 @@ struct FMGenerationOptions {
         return options
     }
 
-    /// Throws normalized `featureUnavailable` when an iOS 27-only generation option
-    /// (`toolCallingMode` / `contextOptions`) is supplied below iOS 27. Options are
-    /// never silently ignored.
+    /// Throws normalized errors instead of silently ignoring options:
+    /// `featureUnavailable` when an iOS 27-only generation option
+    /// (`toolCallingMode` / `contextOptions`) is supplied below iOS 27, and
+    /// `generationFailed` for a `toolCallingMode` value outside
+    /// allowed/required/disallowed (bridge inputs bypass TS validation).
     func validateOSCapabilities() throws {
+        if let mode = toolCallingMode, !["allowed", "required", "disallowed"].contains(mode) {
+            throw FoundationModelsManagerError.generationFailed(
+                "Invalid generation option 'toolCallingMode': '\(mode)'. Expected 'allowed', 'required' or 'disallowed'"
+            )
+        }
         if #available(iOS 27.0, macOS 27.0, *) {
             return
         }
@@ -1480,7 +1487,8 @@ final class FoundationModelsManager: @unchecked Sendable {
         return version
     }
 
-    /// Per-OS feature flags for the iOS 26.4 / 27 feature set.
+    /// Feature flags reflecting actual runtime usability: OS-version gates plus
+    /// live model availability (default system model / Private Cloud Compute).
     static func featureFlags() -> [String: Bool] {
         var features = [
             "privateCloudCompute": false,
@@ -1490,18 +1498,25 @@ final class FoundationModelsManager: @unchecked Sendable {
             "tokenCounting": false,
             "modelVariant": false
         ]
-        if #available(iOS 26.4, macOS 26.4, *) {
+        // Flags describe real capability, not just the OS version: base-model
+        // features additionally require a usable default system model (eligible
+        // device, Apple Intelligence enabled), PCC its own model availability.
+        #if canImport(FoundationModels)
+        if #available(iOS 26.4, macOS 26.4, *), SystemLanguageModel.default.isAvailable {
             features["tokenCounting"] = true
         }
         if #available(iOS 27.0, macOS 27.0, *) {
-            features["privateCloudCompute"] = true
-            features["imageAttachments"] = true
-            features["contextOptions"] = true
-            features["toolCallingMode"] = true
+            if SystemLanguageModel.default.isAvailable {
+                features["imageAttachments"] = true
+                features["contextOptions"] = true
+                features["toolCallingMode"] = true
+            }
+            features["privateCloudCompute"] = PrivateCloudComputeLanguageModel().isAvailable
             // NOTE: `SystemLanguageModel.variant` does not exist in the final iOS 27 SDK
             // (verified against the swiftinterface), so modelVariant stays false and
             // getModelVariant() returns null until Apple ships a replacement symbol.
         }
+        #endif
         return features
     }
 
@@ -1971,7 +1986,19 @@ final class FoundationModelsManager: @unchecked Sendable {
 
                 let nativeOptions = options.toNativeOptions()
                 let nativePrompt = try await makePrompt(structuredPrompt)
-                let response = try await session.respond(to: nativePrompt, options: nativeOptions)
+                let response: LanguageModelSession.Response<String>
+                if #available(iOS 27.0, macOS 27.0, *) {
+                    // Context-aware overload so requested reasoning levels and
+                    // schema-prompt behavior are honored (iOS 26 rejects
+                    // `contextOptions` earlier via validateOSCapabilities).
+                    response = try await session.respond(
+                        to: nativePrompt,
+                        options: nativeOptions,
+                        contextOptions: options.toNativeContextOptions()
+                    )
+                } else {
+                    response = try await session.respond(to: nativePrompt, options: nativeOptions)
+                }
 
                 // Clean up the response and validate it's one of the choices
                 // Access .content from Response<String>
@@ -2325,8 +2352,18 @@ final class FoundationModelsManager: @unchecked Sendable {
                 let name = ref.hasPrefix("#/") ? ref.split(separator: "/").last.map(String.init) ?? ref : ref
                 return try definitionSchema(name)
             }
-            if let choices = schemaDict["enum"] as? [String] {
-                return DynamicGenerationSchema(name: nameHint ?? "value", description: schemaDict["description"] as? String, anyOf: choices)
+            // A declared enum must survive conversion as a constraint. Detect any
+            // enum before the [String] cast: string enums map to `anyOf`, while
+            // numeric, boolean, mixed, or empty enums cannot be expressed safely.
+            // Throw so callers fall back to the prompt path instead of silently
+            // emitting an unconstrained Int/Double/Bool schema.
+            if let rawEnum = schemaDict["enum"] as? [Any] {
+                if let choices = rawEnum as? [String], !choices.isEmpty {
+                    return DynamicGenerationSchema(name: nameHint ?? "value", description: schemaDict["description"] as? String, anyOf: choices)
+                }
+                throw FoundationModelsManagerError.generationFailed(
+                    "Unsupported JSON Schema enum at '\(nameHint ?? "root")': only non-empty string enums are supported"
+                )
             }
             if let anyOf = schemaDict["anyOf"] as? [[String: Any]] {
                 let subSchemas = try anyOf.map { try dynamicSchema(from: $0, nameHint: nil) }
@@ -2457,6 +2494,11 @@ final class FoundationModelsManager: @unchecked Sendable {
     /// 2. Ask the model to respond with a JSON tool call if appropriate
     /// 3. Parse the response to detect tool calls
     ///
+    /// `options.toolCallingMode` selects the protocol flavor: "required" demands one
+    /// JSON tool call (a text-only reply throws a normalized error), "disallowed"
+    /// omits definitions/instructions and always yields text, "allowed"/nil keeps
+    /// the optional flow below.
+    ///
     /// See: https://github.com/mcp-foundation/expo-foundation-models/issues/1
     func respondWithToolsAsync(
         sessionId: String,
@@ -2469,32 +2511,19 @@ final class FoundationModelsManager: @unchecked Sendable {
 
             do {
                 try options.validateOSCapabilities()
+                let mode = FMToolCallingProtocol(toolCallingMode: options.toolCallingMode)
 
-                // Get the tools from the session's configuration
-                // We need to build a prompt that includes tool information
-                let toolsPrompt = buildToolsPrompt(for: sessionId)
-
-                // Preserve image attachments through the prompt-based protocol.
-                let structuredPrompt = FMPrompt(
-                    text: """
-                    \(toolsPrompt)
-
-                    User request: \(prompt.text)
-
-                    If you need to use a tool to answer, respond with ONLY a JSON object in this exact format:
-                    {"tool_call": {"name": "toolName", "arguments": {...}}}
-
-                    If you can answer directly without a tool, just respond normally with text.
-                    """,
-                    images: prompt.images
-                )
-
-                // The prompt-based protocol above owns tool-call detection and JS-side
-                // execution; forwarding native `toolCallingMode` (e.g. "required") would
-                // push the model toward hidden native calls that bypass JavaScript.
+                // The prompt-based protocol below owns tool-call detection and JS-side
+                // execution; forwarding native `toolCallingMode` would push the model
+                // toward hidden native calls that bypass JavaScript.
                 var nativeOptions = options.toNativeOptions()
                 nativeOptions.toolCallingMode = nil
 
+                let structuredPrompt = try makeToolProtocolPrompt(
+                    sessionId: sessionId,
+                    prompt: prompt,
+                    mode: mode
+                )
                 let nativePrompt = try await makePrompt(structuredPrompt)
                 let response: LanguageModelSession.Response<String>
                 if #available(iOS 27.0, macOS 27.0, *) {
@@ -2507,22 +2536,25 @@ final class FoundationModelsManager: @unchecked Sendable {
                     response = try await session.respond(to: nativePrompt, options: nativeOptions)
                 }
 
-                // Try to parse as a tool call
-                if let toolCall = parseToolCallResponse(response.content) {
-                    return [
-                        "type": "toolCall",
-                        "toolCall": [
-                            "id": UUID().uuidString,
-                            "name": toolCall["name"] ?? "",
-                            "arguments": toolCall["arguments"] ?? [:]
-                        ]
-                    ]
+                switch mode {
+                case .forbidden:
+                    // Normal text response; never parse or surface a tool call.
+                    return ["type": "text", "content": response.content]
+                case .required:
+                    // The caller depends on external data: a text-only reply fails
+                    // the request instead of masquerading as an answer.
+                    guard let toolCall = parseToolCallResponse(response.content) else {
+                        throw FoundationModelsManagerError.generationFailed(
+                            "The model did not return a parsable tool call while 'toolCallingMode' was 'required'"
+                        )
+                    }
+                    return ["type": "toolCall", "toolCall": makeToolCallPayload(toolCall)]
+                case .optional:
+                    if let toolCall = parseToolCallResponse(response.content) {
+                        return ["type": "toolCall", "toolCall": makeToolCallPayload(toolCall)]
+                    }
+                    return ["type": "text", "content": response.content]
                 }
-
-                return [
-                    "type": "text",
-                    "content": response.content
-                ]
             } catch {
                 throw Self.mapUnderlyingError(error, fallbackType: .generationFailed)
             }
@@ -2588,6 +2620,10 @@ final class FoundationModelsManager: @unchecked Sendable {
     ///
     /// **iOS 26 Beta Workaround:**
     /// Uses prompt-based tool calling with streaming.
+    ///
+    /// Honors `options.toolCallingMode` like `respondWithTools`: "required" fails when
+    /// no parsable tool call arrives, "disallowed" streams plain text without any
+    /// tool parsing or onToolCall emission, "allowed"/nil detects calls opportunistically.
     func streamWithToolsAsync(
         sessionId: String,
         prompt: FMPrompt,
@@ -2601,30 +2637,19 @@ final class FoundationModelsManager: @unchecked Sendable {
 
             do {
                 try options.validateOSCapabilities()
+                let mode = FMToolCallingProtocol(toolCallingMode: options.toolCallingMode)
 
-                // Build prompt with tool information
-                let toolsPrompt = buildToolsPrompt(for: sessionId)
-
-                // Preserve image attachments through the prompt-based protocol.
-                let structuredPrompt = FMPrompt(
-                    text: """
-                    \(toolsPrompt)
-
-                    User request: \(prompt.text)
-
-                    If you need to use a tool to answer, respond with ONLY a JSON object in this exact format:
-                    {"tool_call": {"name": "toolName", "arguments": {...}}}
-
-                    If you can answer directly without a tool, just respond normally with text.
-                    """,
-                    images: prompt.images
-                )
-
-                // The prompt-based protocol above owns tool-call detection and JS-side
-                // execution; forwarding native `toolCallingMode` (e.g. "required") would
-                // push the model toward hidden native calls that bypass JavaScript.
+                // The prompt-based protocol below owns tool-call detection and JS-side
+                // execution; forwarding native `toolCallingMode` would push the model
+                // toward hidden native calls that bypass JavaScript.
                 var nativeOptions = options.toNativeOptions()
                 nativeOptions.toolCallingMode = nil
+
+                let structuredPrompt = try makeToolProtocolPrompt(
+                    sessionId: sessionId,
+                    prompt: prompt,
+                    mode: mode
+                )
 
                 var fullResponse = ""
                 let nativePrompt = try await makePrompt(structuredPrompt)
@@ -2648,24 +2673,29 @@ final class FoundationModelsManager: @unchecked Sendable {
                     }
                 }
 
-                // Check for tool call in the response
-                if let toolCall = parseToolCallResponse(fullResponse) {
-                    let toolCallInfo: [String: Any] = [
-                        "id": UUID().uuidString,
-                        "name": toolCall["name"] ?? "",
-                        "arguments": toolCall["arguments"] ?? [:]
-                    ]
+                switch mode {
+                case .forbidden:
+                    // Normal streamed text; never parse or emit a tool call.
+                    return ["type": "text", "content": fullResponse]
+                case .required:
+                    // A text-only reply fails the request instead of masquerading
+                    // as an answer.
+                    guard let toolCall = parseToolCallResponse(fullResponse) else {
+                        throw FoundationModelsManagerError.generationFailed(
+                            "The model did not return a parsable tool call while 'toolCallingMode' was 'required'"
+                        )
+                    }
+                    let toolCallInfo = makeToolCallPayload(toolCall)
                     onToolCall(toolCallInfo)
-                    return [
-                        "type": "toolCall",
-                        "toolCall": toolCallInfo
-                    ]
+                    return ["type": "toolCall", "toolCall": toolCallInfo]
+                case .optional:
+                    if let toolCall = parseToolCallResponse(fullResponse) {
+                        let toolCallInfo = makeToolCallPayload(toolCall)
+                        onToolCall(toolCallInfo)
+                        return ["type": "toolCall", "toolCall": toolCallInfo]
+                    }
+                    return ["type": "text", "content": fullResponse]
                 }
-
-                return [
-                    "type": "text",
-                    "content": fullResponse
-                ]
             } catch {
                 throw Self.mapUnderlyingError(error, fallbackType: .streamingFailed)
             }
@@ -2788,6 +2818,80 @@ final class FoundationModelsManager: @unchecked Sendable {
         }
         
         return nil
+    }
+
+    /// Prompt-protocol semantics resolved from `options.toolCallingMode`.
+    ///
+    /// Values arrive pre-validated by `FMGenerationOptions.validateOSCapabilities`,
+    /// so `default` only ever sees `nil` or "allowed".
+    private enum FMToolCallingProtocol {
+        case optional
+        case required
+        case forbidden
+
+        init(toolCallingMode: String?) {
+            switch toolCallingMode {
+            case .some("required"): self = .required
+            case .some("disallowed"): self = .forbidden
+            default: self = .optional
+            }
+        }
+    }
+
+    /// Builds the prompt for the JavaScript-driven tool protocol, shared by
+    /// respondWithTools/streamWithTools so both enforce identical
+    /// `toolCallingMode` semantics. Image attachments are always preserved.
+    private func makeToolProtocolPrompt(
+        sessionId: String,
+        prompt: FMPrompt,
+        mode: FMToolCallingProtocol
+    ) throws -> FMPrompt {
+        switch mode {
+        case .forbidden:
+            // No tool definitions and no tool-call instructions: plain request.
+            return prompt
+        case .optional:
+            return FMPrompt(
+                text: """
+                \(buildToolsPrompt(for: sessionId))
+
+                User request: \(prompt.text)
+
+                If you need to use a tool to answer, respond with ONLY a JSON object in this exact format:
+                {"tool_call": {"name": "toolName", "arguments": {...}}}
+
+                If you can answer directly without a tool, just respond normally with text.
+                """,
+                images: prompt.images
+            )
+        case .required:
+            let toolsPrompt = buildToolsPrompt(for: sessionId)
+            guard !toolsPrompt.isEmpty else {
+                throw FoundationModelsManagerError.generationFailed(
+                    "Generation option 'toolCallingMode' requires a session with at least one registered tool"
+                )
+            }
+            return FMPrompt(
+                text: """
+                \(toolsPrompt)
+
+                User request: \(prompt.text)
+
+                You MUST call one of the tools above to answer this request. Respond with ONLY one JSON object in this exact format, with no text before or after it:
+                {"tool_call": {"name": "toolName", "arguments": {...}}}
+                """,
+                images: prompt.images
+            )
+        }
+    }
+
+    /// Uniform wire payload for a parsed prompt-protocol tool call.
+    private func makeToolCallPayload(_ toolCall: [String: Any]) -> [String: Any] {
+        [
+            "id": UUID().uuidString,
+            "name": toolCall["name"] ?? "",
+            "arguments": toolCall["arguments"] ?? [:]
+        ]
     }
 
     // MARK: - Session Management
