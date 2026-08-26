@@ -652,6 +652,10 @@ enum FMNormalizedErrorCode: String {
     case guardrailViolation
     case unsupportedLanguageOrLocale
     case unsupportedCapability
+    /// Emitted for `FMErrorType.featureUnavailable` failures so the TS facade's
+    /// `parseNativeError` fast path classifies them without relying on message
+    /// heuristics. Already part of the facade's valid-codes vocabulary.
+    case featureUnavailable
     case assetsUnavailable
     case concurrentRequests
     case timeout
@@ -760,7 +764,9 @@ extension FoundationModelsManagerError: CustomNSError {
             .contextSizeExceeded, .rateLimited, .refusal, .guardrailViolation,
             .unsupportedLanguageOrLocale, .unsupportedCapability, .assetsUnavailable,
             .concurrentRequests, .timeout, .transcriptMutationWhileResponding,
-            .unsupportedGenerationGuide, .decodingFailure, .unknown
+            .unsupportedGenerationGuide, .decodingFailure, .unknown,
+            // Appended last so existing numeric error codes stay stable.
+            .featureUnavailable
         ]
         return allCases.firstIndex(of: normalizedCode) ?? allCases.count - 1
     }
@@ -1894,10 +1900,16 @@ final class FoundationModelsManager: @unchecked Sendable {
     /// Reachable on iOS 27+ only: below iOS 27 `validateOSCapabilities()`
     /// rejects every `contextOptions` payload, and a successful native
     /// conversion hands the flag to the framework, which honors it there.
+    ///
+    /// Carries normalized code `featureUnavailable` explicitly: the TS facade
+    /// classifies it via its fast path, whereas message heuristics would
+    /// misfire ("cannot" → refusal, "context…" → contextWindowExceeded).
     private func requireFallbackSchemaInPrompt(_ options: FMGenerationOptions) throws {
         guard options.contextOptions?.includeSchemaInPrompt == false else { return }
-        throw FoundationModelsManagerError.featureUnavailable(
-            "Cannot honor contextOptions.includeSchemaInPrompt = false: the JSON Schema could not be converted to a native generation schema, so the prompt-based fallback must include the schema to preserve structured output"
+        throw FoundationModelsManagerError(
+            type: .featureUnavailable,
+            message: "Cannot honor contextOptions.includeSchemaInPrompt = false: the JSON Schema could not be converted to a native generation schema, so the prompt-based fallback must include the schema to preserve structured output",
+            normalizedCode: .featureUnavailable
         )
     }
 
