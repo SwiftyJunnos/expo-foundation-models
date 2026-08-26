@@ -336,6 +336,27 @@ describe('FoundationModels iOS 27 features', () => {
       expect(error.suggestions.join(' ')).toContain('getFeatures');
     });
 
+    it('should prioritize native featureUnavailable type over refusal message heuristics', async () => {
+      mockModule.respond.mockRejectedValue(
+        Object.assign(
+          new Error(
+            'Cannot honor contextOptions.includeSchemaInPrompt = false because fallback requires the schema'
+          ),
+          {
+            type: 'featureUnavailable',
+            code: 'unsupportedCapability',
+          }
+        )
+      );
+
+      const error = await FoundationModels.respond('session-123', 'Hello').catch((e) => e);
+
+      expect(error).toBeInstanceOf(FoundationModelsError);
+      expect(error.type).toBe('notAvailable');
+      expect(error.errorCode).toBe('featureUnavailable');
+      expect(error.cause).toBeUndefined();
+    });
+
     it('should surface osVersion and features from getAvailability', () => {
       const availability: Availability = {
         available: true,

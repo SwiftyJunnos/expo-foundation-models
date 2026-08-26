@@ -1986,14 +1986,21 @@ function parseNativeError(
     const message = error.message;
     const lowerMessage = message.toLowerCase();
 
-    // Normalized native error codes are authoritative — check them before
-    // message heuristics so iOS 26/27 behavior stays identical.
-    if (nativeInfo?.normalizedCode === 'featureUnavailable') {
+    // A native featureUnavailable type is authoritative even when older native
+    // code reports the broader unsupportedCapability normalized code.
+    const nativeType = nativeInfo?.type as string | undefined;
+    if (
+      nativeInfo?.normalizedCode === 'featureUnavailable' ||
+      nativeType === 'featureUnavailable'
+    ) {
       return new FoundationModelsError(message, {
         type: 'notAvailable',
         code: 'FEATURE_UNAVAILABLE',
         errorCode: 'featureUnavailable',
-        cause: 'unsupportedOSVersion',
+        cause:
+          nativeInfo?.normalizedCode === 'unsupportedCapability'
+            ? undefined
+            : 'unsupportedOSVersion',
         context: nativeInfo?.context,
         diagnostics: nativeInfo?.diagnostics,
         suggestions: nativeInfo?.suggestions ?? [
