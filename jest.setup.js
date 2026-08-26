@@ -4,6 +4,7 @@
 jest.mock('react-native', () => ({
   Platform: {
     OS: 'ios',
+    Version: '27.0',
     select: jest.fn((options) => options.ios),
   },
 }));

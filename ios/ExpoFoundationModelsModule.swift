@@ -1232,6 +1232,25 @@ struct FMGenerationOptions {
         return options
     }
 
+    /// Throws normalized `featureUnavailable` when an iOS 27-only generation option
+    /// (`toolCallingMode` / `contextOptions`) is supplied below iOS 27. Options are
+    /// never silently ignored.
+    func validateOSCapabilities() throws {
+        if #available(iOS 27.0, macOS 27.0, *) {
+            return
+        }
+        if toolCallingMode != nil {
+            throw FoundationModelsManagerError.featureUnavailable(
+                "Generation option 'toolCallingMode' requires iOS 27.0 or later"
+            )
+        }
+        if contextOptions != nil {
+            throw FoundationModelsManagerError.featureUnavailable(
+                "Generation option 'contextOptions' requires iOS 27.0 or later"
+            )
+        }
+    }
+
     #if canImport(FoundationModels)
     @available(iOS 26.0, macOS 26.0, *)
     func toNativeOptions() -> GenerationOptions {
@@ -1663,6 +1682,7 @@ final class FoundationModelsManager: @unchecked Sendable {
             let session = try getSession(sessionId)
 
             do {
+                try options.validateOSCapabilities()
                 let nativeOptions = options.toNativeOptions()
                 let nativePrompt = try await makePrompt(prompt)
                 if #available(iOS 27.0, macOS 27.0, *) {
@@ -1695,6 +1715,7 @@ final class FoundationModelsManager: @unchecked Sendable {
             let session = try getSession(sessionId)
 
             do {
+                try options.validateOSCapabilities()
                 var fullResponse = ""
                 let nativeOptions = options.toNativeOptions()
                 let nativePrompt = try await makePrompt(prompt)
@@ -1852,19 +1873,21 @@ final class FoundationModelsManager: @unchecked Sendable {
     /// Generate structured output using a JSON schema.
     ///
     /// **iOS 27+:** native structured generation via
-    /// JSONSchema → `DynamicGenerationSchema` → `GenerationSchema`, replacing the
-    /// prompt-based JSON parsing workaround. Same wire format (JSON Schema in/out).
+    /// JSONSchema → `DynamicGenerationSchema` → `GenerationSchema`. Non-object roots
+    /// (arrays, strings, numbers…) are returned as the generated value itself.
     /// If the schema cannot be converted, we transparently fall back to the legacy path.
     ///
-    /// **iOS 26 fallback (unchanged):**
-    /// The JSON schema is embedded in the prompt and the response is parsed.
+    /// **iOS 26 / conversion fallback:**
+    /// The JSON schema is embedded in the prompt and the response is parsed. Image
+    /// attachments are preserved via `makePrompt` (or rejected as `featureUnavailable`
+    /// below iOS 27); any JSON root parses, failing explicitly otherwise.
     /// See: https://github.com/mcp-foundation/expo-foundation-models/issues/1
     func respondWithSchemaAsync(
         sessionId: String,
         prompt: FMPrompt,
         schema: [String: Any],
         options: FMGenerationOptions
-    ) async throws -> [String: Any] {
+    ) async throws -> Any {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
             let session = try getSession(sessionId)
@@ -1872,6 +1895,7 @@ final class FoundationModelsManager: @unchecked Sendable {
             if #available(iOS 27.0, macOS 27.0, *),
                let nativeSchema = try? makeGenerationSchema(fromJSONSchema: schema) {
                 do {
+                    try options.validateOSCapabilities()
                     let nativePrompt = try await makePrompt(prompt)
                     let response = try await session.respond(
                         to: nativePrompt,
@@ -1879,31 +1903,32 @@ final class FoundationModelsManager: @unchecked Sendable {
                         options: options.toNativeOptions(),
                         contextOptions: options.toNativeContextOptions()
                     )
-                    return try dictionaryFromGeneratedContent(response.content)
+                    return Self.anyFromGeneratedContent(response.content)
                 } catch {
                     throw Self.mapUnderlyingError(error, fallbackType: .generationFailed)
                 }
             }
 
             do {
-                // Build a prompt that includes only the schema (no English instructions)
-                // English text mixed with non-English prompts can trigger unsupportedLanguageOrLocale errors
+                try options.validateOSCapabilities()
+                // Schema-only prompt (no English instructions); images preserved.
                 let schemaJson = try JSONSerialization.data(withJSONObject: schema, options: .sortedKeys)
                 let schemaString = String(data: schemaJson, encoding: .utf8) ?? "{}"
 
-                // Keep prompt minimal - just the user prompt + schema as JSON
-                // The session's system instructions should already specify output format
-                let structuredPrompt = """
-                \(prompt.text)
+                let structuredPrompt = FMPrompt(
+                    text: """
+                    \(prompt.text)
 
-                JSON Schema: \(schemaString)
-                """
+                    JSON Schema: \(schemaString)
+                    """,
+                    images: prompt.images
+                )
 
                 let nativeOptions = options.toNativeOptions()
-                let response = try await session.respond(to: structuredPrompt, options: nativeOptions)
+                let nativePrompt = try await makePrompt(structuredPrompt)
+                let response = try await session.respond(to: nativePrompt, options: nativeOptions)
 
-                // Parse the JSON response - access .content from Response<String>
-                return try parseJsonResponse(response.content)
+                return try jsonValueFromResponse(response.content)
             } catch {
                 throw Self.mapUnderlyingError(error, fallbackType: .generationFailed)
             }
@@ -1928,19 +1953,25 @@ final class FoundationModelsManager: @unchecked Sendable {
             let session = try getSession(sessionId)
 
             do {
-                // Build a prompt that constrains the response to one of the choices
-                // Avoid English instructions that can trigger unsupportedLanguageOrLocale errors
+                try options.validateOSCapabilities()
+
+                // Constrain the response to one of the choices while preserving any
+                // image attachments (rebuilt as an FMPrompt, never a bare string).
+                // Avoid English instructions that can trigger unsupportedLanguageOrLocale errors.
                 let choicesFormatted = choices.map { "\"\($0)\"" }.joined(separator: ", ")
 
-                // Keep prompt minimal - just user prompt + choices
-                let structuredPrompt = """
-                \(prompt.text)
+                let structuredPrompt = FMPrompt(
+                    text: """
+                    \(prompt.text)
 
-                [\(choicesFormatted)]
-                """
+                    [\(choicesFormatted)]
+                    """,
+                    images: prompt.images
+                )
 
                 let nativeOptions = options.toNativeOptions()
-                let response = try await session.respond(to: structuredPrompt, options: nativeOptions)
+                let nativePrompt = try await makePrompt(structuredPrompt)
+                let response = try await session.respond(to: nativePrompt, options: nativeOptions)
 
                 // Clean up the response and validate it's one of the choices
                 // Access .content from Response<String>
@@ -1967,18 +1998,20 @@ final class FoundationModelsManager: @unchecked Sendable {
     ///
     /// **iOS 27+:** native structured streaming via
     /// JSONSchema → `DynamicGenerationSchema` → `GenerationSchema`; partials are real
-    /// `GeneratedContent` snapshots converted to dictionaries. Falls back to the legacy
-    /// path when the schema cannot be converted.
+    /// `GeneratedContent` snapshots converted to their JSON value (object, array or
+    /// scalar). Falls back to the legacy path when the schema cannot be converted.
     ///
-    /// **iOS 26 fallback (unchanged):**
-    /// Prompt-based streaming with partial JSON parsing on each chunk.
+    /// **iOS 26 / conversion fallback:**
+    /// Prompt-based streaming with partial JSON parsing on each chunk. Image
+    /// attachments are preserved via `makePrompt` (or rejected as `featureUnavailable`
+    /// below iOS 27); any JSON root streams and resolves like any other value.
     func streamWithSchemaAsync(
         sessionId: String,
         prompt: FMPrompt,
         schema: [String: Any],
         options: FMGenerationOptions,
-        onPartial: @escaping ([String: Any]) -> Void
-    ) async throws -> [String: Any] {
+        onPartial: @escaping (Any) -> Void
+    ) async throws -> Any {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
             let session = try getSession(sessionId)
@@ -1986,6 +2019,7 @@ final class FoundationModelsManager: @unchecked Sendable {
             if #available(iOS 27.0, macOS 27.0, *),
                let nativeSchema = try? makeGenerationSchema(fromJSONSchema: schema) {
                 do {
+                    try options.validateOSCapabilities()
                     let nativePrompt = try await makePrompt(prompt)
                     let stream = session.streamResponse(
                         to: nativePrompt,
@@ -1994,61 +2028,63 @@ final class FoundationModelsManager: @unchecked Sendable {
                         contextOptions: options.toNativeContextOptions()
                     )
 
-                    var finalResult: [String: Any] = [:]
+                    var finalResult: Any?
                     for try await partialResponse in stream {
-                        if let partial = Self.dictionaryIfNotEmpty(fromGeneratedContent: partialResponse.content) {
-                            finalResult = partial
-                            onPartial(partial)
-                        }
+                        let value = Self.anyFromGeneratedContent(partialResponse.content)
+                        // Skip empty-object snapshots (early stream noise).
+                        if let dict = value as? [String: Any], dict.isEmpty { continue }
+                        finalResult = value
+                        onPartial(value)
                     }
-                    if finalResult.isEmpty {
+                    guard let result = finalResult else {
                         throw FoundationModelsManagerError.generationFailed(
-                            "Structured generation did not return a JSON object"
+                            "Structured generation did not return any content"
                         )
                     }
-                    return finalResult
+                    return result
                 } catch {
                     throw Self.mapUnderlyingError(error, fallbackType: .streamingFailed)
                 }
             }
 
             do {
-                // Build a prompt that includes only the schema (no English instructions)
-                // English text mixed with non-English prompts can trigger unsupportedLanguageOrLocale errors
+                try options.validateOSCapabilities()
+                // Schema-only prompt (no English instructions); images preserved.
                 let schemaJson = try JSONSerialization.data(withJSONObject: schema, options: .sortedKeys)
                 let schemaString = String(data: schemaJson, encoding: .utf8) ?? "{}"
 
-                // Keep prompt minimal - just the user prompt + schema as JSON
-                let structuredPrompt = """
-                \(prompt.text)
+                let structuredPrompt = FMPrompt(
+                    text: """
+                    \(prompt.text)
 
-                JSON Schema: \(schemaString)
-                """
+                    JSON Schema: \(schemaString)
+                    """,
+                    images: prompt.images
+                )
 
                 let nativeOptions = options.toNativeOptions()
-                let stream = session.streamResponse(to: structuredPrompt, options: nativeOptions)
+                let nativePrompt = try await makePrompt(structuredPrompt)
+                let stream = session.streamResponse(to: nativePrompt, options: nativeOptions)
 
                 var accumulatedText = ""
-                var finalResult: [String: Any] = [:]
 
                 for try await partialResponse in stream {
                     // Access .content from the stream snapshot
                     accumulatedText = partialResponse.content
 
                     // Try to parse partial JSON (may fail for incomplete JSON, which is expected)
-                    if let partial = tryParsePartialJson(accumulatedText) {
-                        finalResult = partial
+                    if let partial = tryParsePartialJsonValue(accumulatedText) {
                         onPartial(partial)
                     }
                 }
 
                 // Parse the final complete response
-                if let parsed = tryParsePartialJson(accumulatedText) {
+                if let parsed = tryParsePartialJsonValue(accumulatedText) {
                     return parsed
                 }
 
                 // If parsing failed, try to extract JSON from the response
-                return try parseJsonResponse(accumulatedText)
+                return try jsonValueFromResponse(accumulatedText)
             } catch {
                 throw Self.mapUnderlyingError(error, fallbackType: .streamingFailed)
             }
@@ -2067,10 +2103,13 @@ final class FoundationModelsManager: @unchecked Sendable {
     // These helpers extract and parse JSON from model responses.
     // See: https://github.com/mcp-foundation/expo-foundation-models/issues/1
 
-    /// Parse a JSON response from the model, handling common formatting issues
-    private func parseJsonResponse(_ response: String) throws -> [String: Any] {
+    /// Parse a JSON value — object, array, string, number, boolean or null — from
+    /// a model response, handling common formatting issues such as markdown code
+    /// fences or prose around the payload. Throws explicitly when no JSON can be
+    /// extracted; callers never fail after generation on non-object roots.
+    private func jsonValueFromResponse(_ response: String) throws -> Any {
         var jsonString = response.trimmingCharacters(in: .whitespacesAndNewlines)
-        
+
         // Remove markdown code blocks if present
         if jsonString.hasPrefix("```json") {
             jsonString = String(jsonString.dropFirst(7))
@@ -2081,33 +2120,35 @@ final class FoundationModelsManager: @unchecked Sendable {
             jsonString = String(jsonString.dropLast(3))
         }
         jsonString = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // Try to find JSON object boundaries if there's extra text
-        if let startIndex = jsonString.firstIndex(of: "{"),
-           let endIndex = jsonString.lastIndex(of: "}") {
-            jsonString = String(jsonString[startIndex...endIndex])
+
+        // Try the full trimmed text first so scalar roots ("yes", 42) parse.
+        if let data = jsonString.data(using: .utf8),
+           let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) {
+            return value
         }
-        
-        guard let data = jsonString.data(using: .utf8) else {
-            throw FoundationModelsManagerError.generationFailed("Failed to encode response as UTF-8")
-        }
-        
-        do {
-            guard let dict = try JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] else {
-                throw FoundationModelsManagerError.generationFailed("Response is not a JSON object")
+
+        // Otherwise locate the outermost container if extra text surrounds it.
+        if let startIndex = jsonString.firstIndex(where: { $0 == "{" || $0 == "[" }),
+           let endIndex = jsonString.lastIndex(where: { $0 == "}" || $0 == "]" }),
+           startIndex < endIndex {
+            let candidate = String(jsonString[startIndex...endIndex])
+            if let data = candidate.data(using: .utf8),
+               let value = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) {
+                return value
             }
-            return dict
-        } catch {
-            throw FoundationModelsManagerError.generationFailed(
-                "Failed to parse JSON response: \(error.localizedDescription). Raw response: \(jsonString.prefix(200))..."
-            )
         }
+
+        throw FoundationModelsManagerError.generationFailed(
+            "Failed to parse JSON response. Raw response: \(response.prefix(200))..."
+        )
     }
-    
-    /// Try to parse partial JSON (for streaming), returns nil if incomplete
-    private func tryParsePartialJson(_ text: String) -> [String: Any]? {
+
+    /// Try to parse a partial JSON container value (for streaming); returns nil
+    /// while the payload is still incomplete. Scalar roots are only detectable
+    /// once complete, so they surface via `jsonValueFromResponse` at stream end.
+    private func tryParsePartialJsonValue(_ text: String) -> Any? {
         var jsonString = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        
+
         // Remove markdown code blocks if present
         if jsonString.hasPrefix("```json") {
             jsonString = String(jsonString.dropFirst(7))
@@ -2115,30 +2156,28 @@ final class FoundationModelsManager: @unchecked Sendable {
             jsonString = String(jsonString.dropFirst(3))
         }
         jsonString = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
-        
-        // Find the JSON object start
-        guard let startIndex = jsonString.firstIndex(of: "{") else {
+
+        guard let startIndex = jsonString.firstIndex(where: { $0 == "{" || $0 == "[" }) else {
             return nil
         }
         jsonString = String(jsonString[startIndex...])
-        
+
         // Try to parse as-is first (complete JSON)
         if let data = jsonString.data(using: .utf8),
-           let dict = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] {
-            return dict
+           let value = try? JSONSerialization.jsonObject(with: data, options: []) {
+            return value
         }
-        
-        // For partial JSON, try to close open brackets
-        // This is a simple heuristic that works for many cases
+
+        // For partial JSON, try to close open structures
         var balanced = jsonString
         var openBraces = 0
         var openBrackets = 0
         var inString = false
         var prevChar: Character = " "
-        
+
         for char in balanced {
             if char == "\"" && prevChar != "\\" {
-                inString = !inString
+                inString.toggle()
             } else if !inString {
                 switch char {
                 case "{": openBraces += 1
@@ -2150,17 +2189,16 @@ final class FoundationModelsManager: @unchecked Sendable {
             }
             prevChar = char
         }
-        
-        // Close any open structures
+
         if inString { balanced += "\"" }
         balanced += String(repeating: "]", count: max(0, openBrackets))
         balanced += String(repeating: "}", count: max(0, openBraces))
-        
+
         if let data = balanced.data(using: .utf8),
-           let dict = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any] {
-            return dict
+           let value = try? JSONSerialization.jsonObject(with: data, options: []) {
+            return value
         }
-        
+
         return nil
     }
 
@@ -2193,27 +2231,43 @@ final class FoundationModelsManager: @unchecked Sendable {
         }
     }
 
-    /// Build an image `Attachment` from a URI (file path / file:// or http(s) URL)
-    /// or base64-encoded data.
+    /// Build an image `Attachment` from base64 data, or from a URI supporting
+    /// http(s) URLs, `file://` URLs and plain filesystem paths. An empty or
+    /// whitespace-only base64 payload counts as absent so it never overrides a
+    /// valid URI.
     @available(iOS 27.0, macOS 27.0, *)
     private func makeImageAttachment(_ image: FMPromptImage) async throws -> Attachment<ImageAttachmentContent> {
-        if let base64 = image.base64 {
+        let base64 = image.base64?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if !base64.isEmpty {
             return Attachment(try Self.cgImage(fromBase64: base64))
         }
-        if let uri = image.uri {
-            if let url = URL(string: uri), let scheme = url.scheme?.lowercased(),
-               scheme == "http" || scheme == "https" {
-                let (data, _) = try await URLSession.shared.data(from: url)
-                return Attachment(try Self.cgImage(fromData: data))
+
+        if let uri = image.uri?.trimmingCharacters(in: .whitespacesAndNewlines), !uri.isEmpty {
+            if let url = URL(string: uri), let scheme = url.scheme?.lowercased() {
+                switch scheme {
+                case "http", "https":
+                    let (data, _) = try await URLSession.shared.data(from: url)
+                    return Attachment(try Self.cgImage(fromData: data))
+                case "file":
+                    // A valid RN-style file:// URI; standardize before touching disk.
+                    let fileURL = url.standardizedFileURL
+                    guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                        throw FoundationModelsManagerError.generationFailed("Prompt image file not found: \(uri)")
+                    }
+                    return Attachment(imageURL: fileURL)
+                default:
+                    break // Unrecognized scheme falls through to plain-path handling.
+                }
             }
-            let fileURL = URL(fileURLWithPath: uri)
+            let fileURL = URL(fileURLWithPath: uri).standardizedFileURL
             guard FileManager.default.fileExists(atPath: fileURL.path) else {
                 throw FoundationModelsManagerError.generationFailed("Prompt image file not found: \(uri)")
             }
             return Attachment(imageURL: fileURL)
         }
+
         throw FoundationModelsManagerError.generationFailed(
-            "Each prompt image must provide either 'uri' or 'base64'"
+            "Each prompt image must provide a non-empty 'uri' or 'base64'"
         )
     }
 
@@ -2324,29 +2378,8 @@ final class FoundationModelsManager: @unchecked Sendable {
         return try GenerationSchema(root: root, dependencies: dependencies)
     }
 
-    /// Convert generated structured content into a dictionary for JavaScript.
-    @available(iOS 26.0, macOS 26.0, *)
-    private func dictionaryFromGeneratedContent(_ content: GeneratedContent) throws -> [String: Any] {
-        if let dict = Self.dictionaryIfNotEmpty(fromGeneratedContent: content) {
-            return dict
-        }
-        throw FoundationModelsManagerError.generationFailed(
-            "Structured generation did not return a JSON object"
-        )
-    }
-
-    @available(iOS 26.0, macOS 26.0, *)
-    private static func dictionaryIfNotEmpty(fromGeneratedContent content: GeneratedContent) -> [String: Any]? {
-        if case .structure(let properties, _) = content.kind {
-            var result: [String: Any] = [:]
-            for (key, value) in properties {
-                result[key] = anyFromGeneratedContent(value)
-            }
-            return result
-        }
-        return nil
-    }
-
+    /// Convert any `GeneratedContent` root into its JSON value — object, array,
+    /// string, number, boolean or null — so non-object schema results survive.
     @available(iOS 26.0, macOS 26.0, *)
     private static func anyFromGeneratedContent(_ content: GeneratedContent) -> Any {
         switch content.kind {
@@ -2369,17 +2402,6 @@ final class FoundationModelsManager: @unchecked Sendable {
         @unknown default:
             return NSNull()
         }
-    }
-
-    /// JSON Schema → GenerationSchema conversion for dynamically-declared tools
-    /// (same conversion path as structured output, exposed for DynamicTool).
-    @available(iOS 26.0, macOS 26.0, *)
-    func generationSchemaForTool(fromJSONSchema json: [String: Any], toolName: String) throws -> GenerationSchema {
-        var schema = json
-        if schema["title"] == nil {
-            schema["title"] = toolName
-        }
-        return try makeGenerationSchema(fromJSONSchema: schema)
     }
     #endif
 
@@ -2446,31 +2468,43 @@ final class FoundationModelsManager: @unchecked Sendable {
             let session = try getSession(sessionId)
 
             do {
+                try options.validateOSCapabilities()
+
                 // Get the tools from the session's configuration
                 // We need to build a prompt that includes tool information
                 let toolsPrompt = buildToolsPrompt(for: sessionId)
 
-                let structuredPrompt = """
-                \(toolsPrompt)
+                // Preserve image attachments through the prompt-based protocol.
+                let structuredPrompt = FMPrompt(
+                    text: """
+                    \(toolsPrompt)
 
-                User request: \(prompt.text)
+                    User request: \(prompt.text)
 
-                If you need to use a tool to answer, respond with ONLY a JSON object in this exact format:
-                {"tool_call": {"name": "toolName", "arguments": {...}}}
+                    If you need to use a tool to answer, respond with ONLY a JSON object in this exact format:
+                    {"tool_call": {"name": "toolName", "arguments": {...}}}
 
-                If you can answer directly without a tool, just respond normally with text.
-                """
+                    If you can answer directly without a tool, just respond normally with text.
+                    """,
+                    images: prompt.images
+                )
 
-                let nativeOptions = options.toNativeOptions()
+                // The prompt-based protocol above owns tool-call detection and JS-side
+                // execution; forwarding native `toolCallingMode` (e.g. "required") would
+                // push the model toward hidden native calls that bypass JavaScript.
+                var nativeOptions = options.toNativeOptions()
+                nativeOptions.toolCallingMode = nil
+
+                let nativePrompt = try await makePrompt(structuredPrompt)
                 let response: LanguageModelSession.Response<String>
                 if #available(iOS 27.0, macOS 27.0, *) {
                     response = try await session.respond(
-                        to: structuredPrompt,
+                        to: nativePrompt,
                         options: nativeOptions,
                         contextOptions: options.toNativeContextOptions()
                     )
                 } else {
-                    response = try await session.respond(to: structuredPrompt, options: nativeOptions)
+                    response = try await session.respond(to: nativePrompt, options: nativeOptions)
                 }
 
                 // Try to parse as a tool call
@@ -2566,31 +2600,43 @@ final class FoundationModelsManager: @unchecked Sendable {
             let session = try getSession(sessionId)
 
             do {
+                try options.validateOSCapabilities()
+
                 // Build prompt with tool information
                 let toolsPrompt = buildToolsPrompt(for: sessionId)
-                
-                let structuredPrompt = """
-                \(toolsPrompt)
 
-                User request: \(prompt.text)
+                // Preserve image attachments through the prompt-based protocol.
+                let structuredPrompt = FMPrompt(
+                    text: """
+                    \(toolsPrompt)
 
-                If you need to use a tool to answer, respond with ONLY a JSON object in this exact format:
-                {"tool_call": {"name": "toolName", "arguments": {...}}}
+                    User request: \(prompt.text)
 
-                If you can answer directly without a tool, just respond normally with text.
-                """
-                
+                    If you need to use a tool to answer, respond with ONLY a JSON object in this exact format:
+                    {"tool_call": {"name": "toolName", "arguments": {...}}}
+
+                    If you can answer directly without a tool, just respond normally with text.
+                    """,
+                    images: prompt.images
+                )
+
+                // The prompt-based protocol above owns tool-call detection and JS-side
+                // execution; forwarding native `toolCallingMode` (e.g. "required") would
+                // push the model toward hidden native calls that bypass JavaScript.
+                var nativeOptions = options.toNativeOptions()
+                nativeOptions.toolCallingMode = nil
+
                 var fullResponse = ""
-                let nativeOptions = options.toNativeOptions()
+                let nativePrompt = try await makePrompt(structuredPrompt)
                 let stream: LanguageModelSession.ResponseStream<String>
                 if #available(iOS 27.0, macOS 27.0, *) {
                     stream = session.streamResponse(
-                        to: structuredPrompt,
+                        to: nativePrompt,
                         options: nativeOptions,
                         contextOptions: options.toNativeContextOptions()
                     )
                 } else {
-                    stream = session.streamResponse(to: structuredPrompt, options: nativeOptions)
+                    stream = session.streamResponse(to: nativePrompt, options: nativeOptions)
                 }
 
                 for try await partialResponse in stream {
@@ -2743,21 +2789,6 @@ final class FoundationModelsManager: @unchecked Sendable {
         
         return nil
     }
-
-    #if canImport(FoundationModels)
-    @available(iOS 26.0, macOS 26.0, *)
-    private func buildDynamicTool(from dict: [String: Any]) throws -> any Tool {
-        guard let name = dict["name"] as? String else {
-            throw FoundationModelsManagerError.generationFailed("Tool must have a 'name'")
-        }
-        guard let description = dict["description"] as? String else {
-            throw FoundationModelsManagerError.generationFailed("Tool must have a 'description'")
-        }
-
-        let parameters = dict["parameters"] as? [String: Any]
-        return DynamicTool(name: name, description: description, parameters: parameters)
-    }
-    #endif
 
     // MARK: - Session Management
 
@@ -2912,13 +2943,13 @@ final class FoundationModelsManager: @unchecked Sendable {
                 }
             }
 
-            // Parse tools if provided
-            var tools: [any Tool] = []
-            if let toolDicts = options["tools"] as? [[String: Any]], !toolDicts.isEmpty {
-                for toolDict in toolDicts {
-                    let tool = try buildDynamicTool(from: toolDict)
-                    tools.append(tool)
-                }
+            // Tools stay JS-driven: definitions are stored for the prompt-based
+            // protocol instead of being registered as executable native tools.
+            // Registering native tools here would let the framework "call" them in
+            // its own loop and fabricate results that bypass JavaScript execution.
+            var toolDicts: [[String: Any]] = []
+            if let providedTools = options["tools"] as? [[String: Any]] {
+                toolDicts = providedTools
             }
 
             let instructions = options["instructions"] as? String
@@ -2927,6 +2958,9 @@ final class FoundationModelsManager: @unchecked Sendable {
             func storeSession(_ session: LanguageModelSession) -> String {
                 queue.async(flags: .barrier) {
                     self.sessions[sessionId] = session
+                    // Tool definitions feed the JS-driven prompt protocol only;
+                    // no executable native tools are registered for these sessions.
+                    self.sessionTools[sessionId] = toolDicts
                 }
                 return sessionId
             }
@@ -2947,7 +2981,6 @@ final class FoundationModelsManager: @unchecked Sendable {
                 let nativeInstructions = instructions.map { Instructions($0) }
                 return storeSession(LanguageModelSession(
                     model: pccModel,
-                    tools: tools,
                     instructions: nativeInstructions
                 ))
             }
@@ -2958,7 +2991,6 @@ final class FoundationModelsManager: @unchecked Sendable {
                 let model = SystemLanguageModel(useCase: useCase, guardrails: guardrails)
                 return storeSession(LanguageModelSession(
                     model: model,
-                    tools: tools,
                     instructions: instructions
                 ))
             }
@@ -2973,7 +3005,6 @@ final class FoundationModelsManager: @unchecked Sendable {
 
             return storeSession(LanguageModelSession(
                 model: model,
-                tools: tools,
                 instructions: instructions
             ))
         }
@@ -3224,77 +3255,6 @@ final class FoundationModelsManager: @unchecked Sendable {
     }
 }
 
-// MARK: - Dynamic Tool
-
-#if canImport(FoundationModels)
-
-/// Arguments payload that captures the raw `GeneratedContent` the model produced
-/// for a dynamically-declared tool, instead of decoding into a fixed @Generable struct.
-@available(iOS 26.0, macOS 26.0, *)
-private struct DynamicToolArguments: ConvertibleFromGeneratedContent {
-    let content: GeneratedContent
-
-    init(_ content: GeneratedContent) throws {
-        self.content = content
-    }
-}
-
-@available(iOS 26.0, macOS 26.0, *)
-private struct DynamicTool: Tool, @unchecked Sendable {
-    // Note: @unchecked Sendable is used because [String: Any] contains Any which is not Sendable.
-    // This is safe in our use case as the parametersDict is only read, never mutated after init.
-    typealias Arguments = DynamicToolArguments
-    typealias Output = String
-
-    let name: String
-    let description: String
-    let parametersDict: [String: Any]?
-
-    init(name: String, description: String, parameters: [String: Any]?) {
-        self.name = name
-        self.description = description
-        self.parametersDict = parameters
-    }
-
-    /// Native parameter schema built from the JS-provided JSON Schema so the model
-    /// sees the declared parameter shape instead of an empty argument list.
-    var parameters: GenerationSchema {
-        do {
-            return try Self.makeParametersSchema(from: parametersDict, toolName: name)
-        } catch {
-            // Fall back to an empty object schema; tool remains callable.
-            let empty = DynamicGenerationSchema(
-                name: name,
-                description: description,
-                properties: []
-            )
-            return (try? GenerationSchema(root: empty, dependencies: [])) ?? GenerationSchema(
-                type: GeneratedContent.self,
-                description: description,
-                properties: []
-            )
-        }
-    }
-
-    private static func makeParametersSchema(from parametersDict: [String: Any]?, toolName: String) throws -> GenerationSchema {
-        guard let schemaDict = parametersDict else {
-            let empty = DynamicGenerationSchema(name: toolName, properties: [])
-            return try GenerationSchema(root: empty, dependencies: [])
-        }
-        // Reuse the manager's JSON Schema → DynamicGenerationSchema conversion.
-        return try FoundationModelsManager.shared.generationSchemaForTool(fromJSONSchema: schemaDict, toolName: toolName)
-    }
-
-    func call(arguments: Arguments) async throws -> String {
-        // Real payload: echo the captured arguments JSON back into the conversation so
-        // the transcript carries actual tool input instead of a '{}' placeholder.
-        // JS-side execution still flows through respondWithTools/streamWithTools and
-        // submitToolResult. On iOS 27 sessions this result feeds the native tool loop.
-        return arguments.content.jsonString
-    }
-}
-#endif
-
 // MARK: - Expo Module
 
 public class ExpoFoundationModelsModule: Module {
@@ -3345,8 +3305,11 @@ public class ExpoFoundationModelsModule: Module {
             return FoundationModelsManager.shared.getAvailability()
         }
 
-        Function("getFeatures") { () -> [String: Bool] in
-            return FoundationModelsManager.featureFlags()
+        Function("getFeatures") { () -> [String: Any] in
+            return [
+                "osVersion": FoundationModelsManager.osVersionString(),
+                "features": FoundationModelsManager.featureFlags()
+            ]
         }
 
         Function("getLocaleInfo") { () -> [String: Any] in
@@ -3412,7 +3375,7 @@ public class ExpoFoundationModelsModule: Module {
 
         // MARK: - Structured Output Functions
 
-        AsyncFunction("respondWithSchema") { (sessionId: String, prompt: FMPrompt, schema: [String: Any], options: [String: Any]?) -> [String: Any] in
+        AsyncFunction("respondWithSchema") { (sessionId: String, prompt: FMPrompt, schema: [String: Any], options: [String: Any]?) -> Any in
             let genOptions = FMGenerationOptions.from(dictionary: options)
             return try await FoundationModelsManager.shared.respondWithSchemaAsync(
                 sessionId: sessionId,
@@ -3432,7 +3395,7 @@ public class ExpoFoundationModelsModule: Module {
             )
         }
 
-        AsyncFunction("streamWithSchema") { (sessionId: String, prompt: FMPrompt, schema: [String: Any], options: [String: Any]?) -> [String: Any] in
+        AsyncFunction("streamWithSchema") { (sessionId: String, prompt: FMPrompt, schema: [String: Any], options: [String: Any]?) -> Any in
             let genOptions = FMGenerationOptions.from(dictionary: options)
             return try await FoundationModelsManager.shared.streamWithSchemaAsync(
                 sessionId: sessionId,

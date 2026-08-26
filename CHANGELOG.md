@@ -18,15 +18,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Multimodal prompts: `respond`/`streamResponse` accept object prompts
   `{ text, images?: Array<{ uri } | { base64 }> }` (iOS 27.0+; string prompts unchanged)
 - Context options in generation options:
-  `contextOptions: { reasoningLevel?: 'light' | 'moderate' | 'deep', includeSchemaInPrompt?: boolean }` (iOS 27.0+)
-- Tool calling mode in generation options: `toolCallingMode?: 'allowed' | 'required' | 'disallowed'` (iOS 27.0+)
+  `contextOptions: { reasoningLevel?: 'light' | 'moderate' | 'deep', includeSchemaInPrompt?: boolean }`
+  (iOS 27.0+; passing it on iOS 26 or earlier rejects with `featureUnavailable`)
+- Tool calling mode in generation options:
+  `toolCallingMode?: 'allowed' | 'required' | 'disallowed'`
+  (iOS 27.0+; passing it on iOS 26 or earlier rejects with `featureUnavailable`)
 - `FoundationModels.getTokenCount(text)` and `FoundationModels.getContextSize()` (iOS 26.4+;
   `getContextSize()` returns `null` below 26.4)
 - `FoundationModels.getModelVariant()` (reserved API; returns `null` on all versions —
   `SystemLanguageModel.variant` is documented for iOS 27 but absent from the shipped SDK)
 - Native structured output on iOS 27+: JSON Schema → `DynamicGenerationSchema` → `GenerationSchema`
   (prompt-based fallback retained on iOS 26)
-- Real `ToolOutput` return from tool calls on iOS 27+ (`'{}'` placeholder retained on iOS 26)
+- Tool calling on every supported OS version via the JavaScript-driven prompt flow:
+  the model returns a parsed JSON tool call, the app executes the tool, and
+  `submitToolResult` continues generation with the result
 - Example app "iOS 27" tab demonstrating all new capabilities behind `getFeatures()` guards
 
 ### Changed
@@ -36,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `guardrailViolation`, …) with identical behavior on iOS 26 and iOS 27 devices.
   Replaces the obsoleted `LanguageModelSession.GenerationError` mapping
   (`exceededContextWindowSize` → `contextSizeExceeded`, `unsupportedGuide` → `unsupportedGenerationGuide`)
+
+- Native tool calls no longer fabricate results: `DynamicTool` surfaces the prompt-based
+  tool-call request to JavaScript and generation continues only through `submitToolResult`
 
 ### Fixed
 

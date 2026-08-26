@@ -212,15 +212,11 @@ const response = await FoundationModels.respond(
 );
 ```
 
-**Implementation Challenges:**
-- Need bidirectional communication for tool calls
-- Swift calls back to JS when tool is invoked
-- JS executes handler and returns result to Swift
-- Swift continues generation with tool result
-
-**Architecture Options:**
-1. Event-based: Emit `onToolCall` event, wait for `submitToolResult`
-2. Callback-based: Pass tool handlers that get invoked
+**Implemented Flow:**
+- Tool definitions are included in the prompt sent to the model
+- `respondWithTools` returns a parsed JSON tool call (`{ type: 'toolCall', toolCall }`)
+- The app executes the tool handler in JavaScript
+- `submitToolResult` continues generation with the tool result
 
 ---
 
@@ -451,6 +447,8 @@ Object prompts `{ text, images?: Array<{ uri } | { base64 }> }` for `respond`/`s
 - `contextOptions: { reasoningLevel?, includeSchemaInPrompt? }`
 - `toolCallingMode: 'allowed' | 'required' | 'disallowed'`
 
+Both reject with `featureUnavailable` when passed on iOS 26 or earlier.
+
 ### 8.5 Token Counting & Model Info
 **Status:** ✅ Completed
 
@@ -460,8 +458,10 @@ Object prompts `{ text, images?: Array<{ uri } | { base64 }> }` for `respond`/`s
 ### 8.6 Native Structured Output & Tool Output
 **Status:** ✅ Completed
 
-On iOS 27+: native `DynamicGenerationSchema` → `GenerationSchema` conversion and real
-`ToolOutput` returns; iOS 26 fallbacks retained unchanged.
+On iOS 27+: native `DynamicGenerationSchema` → `GenerationSchema` conversion; the iOS 26
+prompt-based fallback is retained unchanged. Tool calling itself uses the same
+JavaScript-driven prompt flow on every OS version — the model returns a JSON tool call and
+generation continues through `submitToolResult`; results are never fabricated natively.
 
 ## Implementation Status
 
@@ -498,7 +498,7 @@ All phases completed for v1.0.0; Phase 8 (iOS 27 support) completed for the next
 ### iOS Version Requirements
 - Foundation Models base API: iOS 26.0+
 - Token counting: iOS 26.4+
-- Private Cloud Compute, image attachments, context options, tool calling mode, model variant: iOS 27.0+
+- Private Cloud Compute, image attachments, context options, tool calling mode: iOS 27.0+
 - CoreML: iOS 16.0+
 
 ### Known Limitations

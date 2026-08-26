@@ -1,16 +1,20 @@
 import { Platform } from 'react-native';
 import { FoundationModels, FoundationModelsError } from '../index';
-import type { JSONSchema, GenerationOptions } from '../ExpoFoundationModels.types';
+import type { JSONSchema, GenerationOptions, PartialSchemaEvent } from '../ExpoFoundationModels.types';
 import ExpoFoundationModelsModule from '../ExpoFoundationModelsModule';
 
 // Get the mocked module
 const mockModule = ExpoFoundationModelsModule as jest.Mocked<typeof ExpoFoundationModelsModule>;
 
+// The react-native module is mocked in jest.setup.js; typed handle for mutating OS.
+const platformMock = Platform as unknown as { OS: string };
+
 describe('FoundationModels - Structured Output', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (Platform as any).OS = 'ios';
+    platformMock.OS = 'ios';
   });
+
 
   describe('respondWithSchema', () => {
     const personSchema: JSONSchema = {
@@ -164,6 +168,39 @@ describe('FoundationModels - Structured Output', () => {
 
       expect(result.status).toBe('approved');
     });
+
+    it('should forward generated scalar roots unchanged', async () => {
+      const scalarSchema: JSONSchema = { type: 'integer' };
+      mockModule.respondWithSchema.mockResolvedValue(42);
+
+      const result = await FoundationModels.respondWithSchema<number>(
+        'session-123',
+        'Pick a number',
+        scalarSchema
+      );
+
+      expect(result).toBe(42);
+    });
+
+    it('should forward generated non-object array roots unchanged', async () => {
+      const arrayRootSchema: JSONSchema = { type: 'array', items: { type: 'string' } };
+      mockModule.respondWithSchema.mockResolvedValue(['apple', 'banana']);
+
+      const result = await FoundationModels.respondWithSchema<string[]>(
+        'session-123',
+        'Generate a list of fruits',
+        arrayRootSchema
+      );
+
+      expect(mockModule.respondWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Generate a list of fruits',
+        arrayRootSchema,
+        null
+      );
+      expect(result).toEqual(['apple', 'banana']);
+    });
+
 
     it('should throw FoundationModelsError when session ID is empty', async () => {
       await expect(
@@ -399,6 +436,27 @@ describe('FoundationModels - Structured Output', () => {
       ).rejects.toThrow();
 
       expect(mockRemove).toHaveBeenCalled();
+    });
+
+    it('should deliver non-object partials and final results unchanged', async () => {
+      const arrayRootSchema: JSONSchema = { type: 'array', items: { type: 'string' } };
+      mockModule.streamWithSchema.mockResolvedValue(['a', 'b']);
+      const onPartial = jest.fn();
+
+      const pending = FoundationModels.streamWithSchema<string[]>(
+        'session-123',
+        'Generate a list',
+        arrayRootSchema,
+        onPartial
+      );
+      // Emit a partial through the registered onPartialSchema listener.
+      const handler = mockModule.addListener.mock.calls.find(
+        (call) => call[0] === 'onPartialSchema'
+      )?.[1] as unknown as (event: PartialSchemaEvent) => void;
+      handler({ sessionId: 'session-123', partial: ['a'] });
+
+      await expect(pending).resolves.toEqual(['a', 'b']);
+      expect(onPartial).toHaveBeenCalledWith(['a']);
     });
 
     it('should throw FoundationModelsError when session ID is empty', async () => {

@@ -18,6 +18,17 @@ Generate JSON conforming to schemas or constrain output to specific choices.
 > always produce valid JSON), no native schema enforcement, slightly higher token usage,
 > and partial JSON parsing during streaming may fail.
 >
+> **Non-object root schemas** are supported on both paths: a schema whose root is an
+> array, string, number, boolean, or null returns the generated value directly — native
+> conversion (`anyFromGeneratedContent`) on iOS 27+, JSON parsing of the response text on
+> the iOS 26 fallback. There is no object-wrapping and no post-generation failure for
+> non-object roots.
+>
+> **Image attachments** in a structured-output prompt are always forwarded to the model
+> through a native `Prompt` with attachments — including on the fallback path. On iOS 26
+> or earlier, image attachments reject explicitly with error code `featureUnavailable`;
+> images are never silently dropped.
+>
 > The library selects the path automatically at runtime — check
 > `(await FoundationModels.getFeatures()).osVersion` if you need to know which one applies.
 

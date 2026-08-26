@@ -212,7 +212,8 @@ export type JSONSchema = {
  */
 export type PartialSchemaEvent = {
   sessionId: string;
-  partial: Record<string, unknown>;
+  /** Partial generated value — any JSON value for non-object root schemas */
+  partial: unknown;
 };
 
 // MARK: - Tool Calling Types
@@ -842,6 +843,16 @@ export type FoundationModelsFeatures = {
 };
 
 /**
+ * Result of `getFeatures()`.
+ */
+export type FeaturesResult = {
+  /** OS version string reported by the platform (e.g., "27.0") */
+  osVersion: string;
+  /** Feature flags for the reported OS version (all false below each feature's minimum) */
+  features: FoundationModelsFeatures;
+};
+
+/**
  * Model specifier for session creation.
  *
  * - `{ type: 'system' }`: The default on-device system language model.
@@ -866,7 +877,9 @@ export type ContextOptions = {
 };
 
 /**
- * An image attachment for a prompt. Exactly one of `uri` or `base64` must be set.
+ * An image attachment for a prompt. Exactly one own field (`uri` or `base64`)
+ * must be present and carry a non-empty string; images with both fields or an
+ * empty present field are rejected before reaching the native layer.
  */
 export type PromptImage = { uri: string } | { base64: string };
 

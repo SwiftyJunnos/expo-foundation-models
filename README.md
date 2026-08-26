@@ -40,7 +40,7 @@ Expo module for Apple's **Foundation Models** (on-device LLM with Apple Intellig
 > library keeps every iOS 26 fallback in place and switches to native implementations
 > automatically when running on iOS 27+:
 > - **Structured Output**: On iOS 26 the JSON Schema is embedded in the prompt and the response is parsed. On iOS 27+ the schema is converted natively (`DynamicGenerationSchema` → `GenerationSchema`); same wire format, better reliability.
-> - **Tool Calling**: On iOS 26 tool calls use a prompt-based workaround with a `'{}'` output placeholder. On iOS 27+ `DynamicTool.call` returns real `ToolOutput` values.
+> - **Tool Calling**: Tool calls use a JavaScript-driven prompt flow on every supported OS version: the model returns a JSON tool call, your code executes the tool, and `submitToolResult` continues the conversation with the result.
 > - **New capabilities** (Private Cloud Compute, image attachments, context options, tool calling mode) require iOS 27+. Detect them at runtime with `getFeatures()`. The `modelVariant` flag stays `false`: Apple documented a model-variant API for iOS 27 but the final SDK does not ship it, so `getModelVariant()` currently returns `null` on every OS version.
 >
 > See [KNOWN_ISSUES.md](./KNOWN_ISSUES.md) for details.
@@ -94,7 +94,7 @@ console.log(await FoundationModels.getFeatures());
 //     contextOptions: true,
 //     toolCallingMode: true,
 //     tokenCounting: true,   // iOS 26.4+
-//     modelVariant: true,
+//     modelVariant: false,   // reserved — symbol absent from the shipped iOS 27 SDK
 //   }
 // }
 
@@ -132,7 +132,7 @@ if (features.features.toolCallingMode) {
 if (features.features.tokenCounting) {
   const tokens = await FoundationModels.getTokenCount('Hello, world!'); // iOS 26.4+
   const size = await FoundationModels.getContextSize();                 // number | null
-  const variant = await FoundationModels.getModelVariant();            // { displayName? } | null (iOS 27+)
+  const variant = await FoundationModels.getModelVariant();            // reserved — currently null on every OS version
 }
 ```
 
@@ -169,7 +169,7 @@ npx expo run:ios
 - **iOS 26.0+** for Foundation Models
 - **iOS 16.0+** for CoreML only
 - **iOS 26.4+** for token counting (`getTokenCount` / `getContextSize`)
-- **iOS 27.0+** for Private Cloud Compute, image attachments, context options, tool calling mode, and model variant
+- **iOS 27.0+** for Private Cloud Compute, image attachments, context options, and tool calling mode (`getModelVariant()` is a reserved API that returns `null` on all versions)
 - **Apple Intelligence** enabled in device Settings
 - Device with Apple Silicon (A17+ for Foundation Models)
 

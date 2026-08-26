@@ -7,6 +7,7 @@ import type {
   FoundationModelsErrorCode,
   FoundationModelsErrorObject,
   FoundationModelsFeatures,
+  FeaturesResult,
   GenerationOptions,
   SamplingMode,
   TokenEvent,
@@ -69,6 +70,7 @@ export type {
   FoundationModelsErrorCode,
   FoundationModelsErrorObject,
   FoundationModelsFeatures,
+  FeaturesResult,
   GenerationOptions,
   SamplingMode,
   TokenEvent,
@@ -221,13 +223,24 @@ function assertPromptInput(
       );
     }
     const img = image as Record<string, unknown>;
-    const hasUri = typeof img.uri === 'string' && img.uri.length > 0;
-    const hasBase64 = typeof img.base64 === 'string' && img.base64.length > 0;
-    if (hasUri === hasBase64) {
+    const hasOwn = (key: string) => Object.prototype.hasOwnProperty.call(img, key);
+    const hasUriField = hasOwn('uri');
+    const hasBase64Field = hasOwn('base64');
+    if (hasUriField === hasBase64Field) {
+      // Both fields present (even when one is empty) or neither present.
       throw new FoundationModelsError(
         'Each prompt image must have exactly one of uri or base64',
         { type: errorType }
       );
+    }
+    // The single present own field must carry a non-empty string so an
+    // ambiguous image never crosses the bridge to fail natively.
+    const field = hasUriField ? 'uri' : 'base64';
+    const value = img[field];
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new FoundationModelsError(`Prompt image ${field} must be a non-empty string`, {
+        type: errorType,
+      });
     }
   }
 }
@@ -980,17 +993,18 @@ export const FoundationModels = {
   },
 
   /**
-   * Get the iOS 27+ Foundation Models feature flags supported on this device.
+   * Get the Foundation Models feature flags supported on this device, together
+   * with the OS version they were reported for.
    *
    * All flags are `false` when Foundation Models is not usable (non-iOS,
    * missing native module) or on OS versions below each feature's minimum
    * (`tokenCounting`: iOS 26.4+, all others: iOS 27+).
    *
-   * @returns Feature flags
+   * @returns OS version and nested feature flags
    *
    * @example
    * ```typescript
-   * const features = await FoundationModels.getFeatures();
+   * const { osVersion, features } = await FoundationModels.getFeatures();
    * if (features.imageAttachments) {
    *   await FoundationModels.respond(sessionId, {
    *     text: 'What is in this image?',
@@ -999,15 +1013,19 @@ export const FoundationModels = {
    * }
    * ```
    */
-  async getFeatures(): Promise<FoundationModelsFeatures> {
+  async getFeatures(): Promise<FeaturesResult> {
+    const fallback: FeaturesResult = {
+      osVersion: Platform.Version?.toString() ?? 'unknown',
+      features: ALL_FEATURES_UNAVAILABLE,
+    };
     if (Platform.OS !== 'ios' || !isNativeModuleAvailable()) {
-      return ALL_FEATURES_UNAVAILABLE;
+      return fallback;
     }
     try {
       return await ExpoFoundationModelsModule.getFeatures();
     } catch (error) {
       console.warn('[FoundationModels] getFeatures() failed:', error);
-      return ALL_FEATURES_UNAVAILABLE;
+      return fallback;
     }
   },
 
@@ -1356,7 +1374,10 @@ export const FoundationModels = {
    * @param prompt - The user prompt
    * @param schema - JSON Schema defining the expected output structure
    * @param options - Optional generation options
-   * @returns Promise resolving to an object matching the schema
+   * @returns Promise resolving to the generated value matching the schema.
+   * Object roots resolve to an object; non-object roots (array, string,
+   * number, boolean) resolve to the generated value as-is — pass an explicit
+   * generic when the root is not an object.
    * @throws {FoundationModelsError} If generation fails
    *
    * @example
@@ -1454,7 +1475,9 @@ export const FoundationModels = {
    * @param schema - JSON Schema defining the expected output structure
    * @param onPartial - Callback invoked with partial results as they're generated
    * @param options - Optional generation options
-   * @returns Promise resolving to the complete object matching the schema
+   * @returns Promise resolving to the complete generated value matching the
+   * schema; non-object roots resolve to the value as-is (pass an explicit
+   * generic). Partial events may carry any JSON value for non-object roots.
    * @throws {FoundationModelsError} If streaming fails
    */
   async streamWithSchema<T = Record<string, unknown>>(
@@ -1963,7 +1986,6 @@ function parseNativeError(
     const message = error.message;
     const lowerMessage = message.toLowerCase();
 
-
     // Normalized native error codes are authoritative — check them before
     // message heuristics so iOS 26/27 behavior stays identical.
     if (nativeInfo?.normalizedCode === 'featureUnavailable') {
@@ -1975,8 +1997,8 @@ function parseNativeError(
         context: nativeInfo?.context,
         diagnostics: nativeInfo?.diagnostics,
         suggestions: nativeInfo?.suggestions ?? [
-          'This feature requires iOS 27.0 or later',
-          'Check FoundationModels.getFeatures() before using iOS 27-only APIs',
+          'This capability is unavailable on this device or OS version',
+          'Check FoundationModels.getFeatures() before using version-gated APIs',
         ],
       });
     }

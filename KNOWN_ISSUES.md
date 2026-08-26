@@ -56,6 +56,17 @@ Under `#available(iOS 27.0, *)`, schemas are converted **natively**:
 JSON Schema → `DynamicGenerationSchema` → `GenerationSchema`. Output is enforced by the
 framework instead of prompt instructions; the same wire format is preserved.
 
+### Root Schemas and Image Attachments
+
+- **Non-object roots:** Schemas whose root is an array, string, number, boolean, or null
+  are supported on both paths — the generated value is returned directly (native
+  conversion via `anyFromGeneratedContent` on iOS 27+, JSON parsing of the response text
+  on the iOS 26 fallback). There is no post-generation failure for non-object roots.
+- **Image attachments:** When a structured-output prompt carries images, they are always
+  forwarded to the model through a native `Prompt` with `Attachment`s — including on the
+  fallback path. On iOS 26 or earlier, image attachments reject explicitly with
+  `featureUnavailable`; images are never silently dropped.
+
 ### Remaining Limitations (iOS 26 fallback only)
 
 - **Reliability:** The model might not always produce valid JSON
@@ -67,9 +78,9 @@ framework instead of prompt instructions; the same wire format is preserved.
 
 ## Issue #2: Tool Calling API Requires Compile-Time Types
 
-**Status:** Resolved on iOS 27.0+ · fallback retained for iOS 26  
+**Status:** Workaround on all supported OS versions · unified JavaScript-driven flow  
 **Affected APIs:** `createSessionWithTools()`, `respondWithTools()`, `submitToolResult()`  
-**iOS Version:** iOS 26.x (fallback path)
+**iOS Version:** iOS 26.x and iOS 27.0+
 
 ### Problem
 
@@ -77,7 +88,7 @@ On iOS 26, the native Foundation Models Tool API requires compile-time `@Generab
 argument types. These Swift types must be defined at compile time, making it impossible
 to create dynamic tool definitions from JavaScript.
 
-### Fallback (iOS 26)
+### Approach (All OS Versions)
 
 We use a **prompt-based approach**:
 
@@ -85,8 +96,8 @@ We use a **prompt-based approach**:
 2. When responding, tool definitions are included in the prompt
 3. The model is instructed to respond with a JSON tool call if needed
 4. The response is parsed to detect tool calls
-5. Tool results are submitted by continuing the conversation with the result;
-   `DynamicTool.call` returns a `'{}'` output placeholder
+5. The app executes the tool handler in JavaScript and submits the result with
+   `submitToolResult`, which continues generation with that result
 
 ```swift
 let structuredPrompt = """
@@ -105,14 +116,15 @@ If you need to use a tool, respond with ONLY:
 """
 ```
 
-### What Changed on iOS 27
+### Behavior on iOS 27
 
-Under `#available(iOS 27.0, *)`, `DynamicTool.call` returns a real `ToolOutput` to the
-framework instead of the `'{}'` placeholder, and tool calls are natively validated.
-Additionally, `toolCallingMode` (`'allowed' | 'required' | 'disallowed'`) is available in
-generation options on iOS 27+.
+The tool-calling flow is identical on iOS 27+: the model still returns a JSON tool call,
+JavaScript executes it, and `submitToolResult` continues the conversation. Native tool
+code never fabricates or short-circuits results. The only iOS 27-specific addition is the
+`toolCallingMode` (`'allowed' | 'required' | 'disallowed'`) generation option, which
+rejects with `featureUnavailable` on iOS 26 or earlier.
 
-### Remaining Limitations (iOS 26 fallback only)
+### Remaining Limitations (All OS Versions)
 
 - Model may not always format tool calls correctly
 - No native tool call validation

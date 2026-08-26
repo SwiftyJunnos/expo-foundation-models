@@ -2,21 +2,27 @@
 
 Let the model call functions you define to extend its capabilities.
 
-> **iOS Version Behavior**
+> **How Tool Calling Works**
 >
-> - **iOS 27.0+** — Native tool calling. `DynamicTool.call` returns real `ToolOutput`
->   values to the framework; tool calls are validated natively.
-> - **iOS 26.x** — Prompt-based fallback. The native Tool API requires compile-time
->   `@Generable` argument types there, so:
->   1. Tool definitions are included in the prompt to the model
->   2. The model responds with a JSON tool call if needed
->   3. Tool results are submitted by continuing the conversation (output placeholder `'{}'`)
+> Tool calling uses a **JavaScript-driven prompt flow on every supported OS version**
+> (iOS 26.x and iOS 27.0+ alike), because Apple's native Tool API requires compile-time
+> `@Generable` argument types that cannot be created from JavaScript:
+> 1. Tool definitions are included in the prompt sent to the model
+> 2. The model responds with a JSON tool call when it needs a tool
+>    (`respondWithTools` resolves to `{ type: 'toolCall', toolCall }`)
+> 3. Your JavaScript code executes the tool handler
+> 4. `submitToolResult` continues the conversation with the tool result
 >
-> **On iOS 26 the following limitations remain:** the model may not always format tool
-> calls correctly, no native tool call validation, and slightly higher token usage due
-> to tool definitions in the prompt.
+> Native code never fabricates or short-circuits a tool result — generation continues
+> only through `submitToolResult`.
 >
-> The library selects the path automatically at runtime.
+> **Limitations (all OS versions):** the model may not always format tool calls
+> correctly and there is no native tool-call validation, so validate arguments before
+> executing them. Token usage is slightly higher because tool definitions are part of
+> the prompt.
+>
+> The flow is identical on iOS 26 and iOS 27; only the `toolCallingMode` option below is
+> iOS 27-only.
 
 ## Overview
 

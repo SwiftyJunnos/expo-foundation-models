@@ -15,6 +15,7 @@ import {
   FoundationModelsError,
   type TranscriptEntry,
   type FeedbackOptions,
+  type FoundationModelsFeatures,
 } from 'expo-foundation-models';
 
 // Demo tabs
@@ -824,14 +825,10 @@ function FeedbackDemo() {
 // iOS 27 Demo - Feature-gated new capabilities
 // ============================================================================
 
-// Local structural type so the demo stays compilable against older library versions.
-type IOS27FeatureFlags = {
-  privateCloudCompute: boolean;
-  imageAttachments: boolean;
-  contextOptions: boolean;
-  toolCallingMode: boolean;
-  tokenCounting: boolean;
-  modelVariant: boolean;
+// Shared nested result of `getFeatures()` (contract: { osVersion, features }).
+type GetFeaturesResult = {
+  osVersion: string;
+  features: FoundationModelsFeatures;
 };
 
 // Tiny 1x1 red PNG used as an inline base64 image attachment for the multimodal demo.
@@ -841,9 +838,9 @@ const DEMO_IMAGE_BASE64 =
 function IOS27Demo() {
   const [loading, setLoading] = useState(false);
   const [osVersion, setOsVersion] = useState<string | null>(null);
-  const [features, setFeatures] = useState<IOS27FeatureFlags | null>(null);
   const [modelInfo, setModelInfo] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
+  const [features, setFeatures] = useState<FoundationModelsFeatures | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Defensive access keeps this tab crash-free on devices running a library
@@ -862,22 +859,13 @@ function IOS27Demo() {
         setError('getFeatures() is not available in this library build. Update expo-foundation-models.');
         return;
       }
-
-      const detected = await fm.getFeatures();
-      const flags: IOS27FeatureFlags = {
-        privateCloudCompute: !!detected?.features?.privateCloudCompute,
-        imageAttachments: !!detected?.features?.imageAttachments,
-        contextOptions: !!detected?.features?.contextOptions,
-        toolCallingMode: !!detected?.features?.toolCallingMode,
-        tokenCounting: !!detected?.features?.tokenCounting,
-        modelVariant: !!detected?.features?.modelVariant,
-      };
-      setOsVersion(detected?.osVersion ?? 'unknown');
-      setFeatures(flags);
+      const detected: GetFeaturesResult = await fm.getFeatures();
+      setOsVersion(detected.osVersion);
+      setFeatures(detected.features);
 
       // Token counting (iOS 26.4+) and variant info (iOS 27+) when supported
       const infoLines: string[] = [];
-      if (flags.tokenCounting && typeof fm.getTokenCount === 'function') {
+      if (detected.features.tokenCounting && typeof fm.getTokenCount === 'function') {
         const tokens: number = await fm.getTokenCount('Hello, how are you today?');
         infoLines.push(`Token count ("Hello, how are you today?"): ${tokens}`);
         if (typeof fm.getContextSize === 'function') {
@@ -885,7 +873,7 @@ function IOS27Demo() {
           infoLines.push(`Context size: ${contextSize != null ? contextSize : 'N/A (< iOS 26.4)'}`);
         }
       }
-      if (flags.modelVariant && typeof fm.getModelVariant === 'function') {
+      if (detected.features.modelVariant && typeof fm.getModelVariant === 'function') {
         const variant = await fm.getModelVariant();
         infoLines.push(`Model variant: ${variant?.displayName ?? 'default'}`);
       }
@@ -996,10 +984,10 @@ function IOS27Demo() {
     if (!features?.toolCallingMode) return;
     setLoading(true);
     setError(null);
-    setResult(null);
+    let sessionId: string | null = null;
 
     try {
-      const sessionId = await FoundationModels.createSessionWithTools({
+      sessionId = await FoundationModels.createSessionWithTools({
         instructions: 'You answer questions about time using tools.',
         tools: [
           {
@@ -1029,10 +1017,14 @@ function IOS27Demo() {
       } else {
         setResult(`[toolCallingMode=required]\n${response.content ?? JSON.stringify(response)}`);
       }
-      await FoundationModels.closeSession(sessionId);
     } catch (err) {
       setError(err instanceof FoundationModelsError ? err.message : String(err));
     } finally {
+      if (sessionId) {
+        try {
+          await FoundationModels.closeSession(sessionId);
+        } catch {}
+      }
       setLoading(false);
     }
   }, [features]);

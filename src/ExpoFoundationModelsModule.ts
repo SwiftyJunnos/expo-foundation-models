@@ -12,7 +12,7 @@ import type {
   ExtendedSessionOptions,
   FeedbackOptions,
   FeedbackResult,
-  FoundationModelsFeatures,
+  FeaturesResult,
   GenerationOptions,
   InputValidationResult,
   JSONSchema,
@@ -50,7 +50,7 @@ declare class ExpoFoundationModelsModuleType extends NativeModule<ExpoFoundation
   getSessionDiagnostics(sessionId: string): Promise<SessionDiagnostics>;
 
   getLocaleInfo(): LocaleInfo;
-  getFeatures(): Promise<FoundationModelsFeatures>;
+  getFeatures(): Promise<FeaturesResult>;
 
   // Foundation Models - Session Management
   createSession(instructions: string | null): Promise<string>;
@@ -84,7 +84,7 @@ declare class ExpoFoundationModelsModuleType extends NativeModule<ExpoFoundation
     prompt: string | PromptWithAttachments,
     schema: JSONSchema,
     options: GenerationOptions | null
-  ): Promise<Record<string, unknown>>;
+  ): Promise<unknown>;
   respondWithChoices(
     sessionId: string,
     prompt: string | PromptWithAttachments,
@@ -96,7 +96,7 @@ declare class ExpoFoundationModelsModuleType extends NativeModule<ExpoFoundation
     prompt: string | PromptWithAttachments,
     schema: JSONSchema,
     options: GenerationOptions | null
-  ): Promise<Record<string, unknown>>;
+  ): Promise<unknown>;
 
   // Foundation Models - Tool Calling
   respondWithTools(
