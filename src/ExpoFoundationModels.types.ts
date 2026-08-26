@@ -58,6 +58,7 @@ export type GenerationOptions = {
    * Must be a positive integer.
    */
   maximumResponseTokens?: number;
+
 };
 
 /**
@@ -65,7 +66,9 @@ export type GenerationOptions = {
  */
 export type TokenEvent = {
   token: string;
-  sessionId: string;
+
+  /** Session ID that emitted this token */
+  sessionId?: string;
 };
 
 /**
@@ -76,6 +79,7 @@ export type UnavailableReason =
   | 'appleIntelligenceNotEnabled'
   | 'modelNotReady'
   | 'platformNotSupported'
+  | 'nativeModuleNotAvailable'
   | 'unknown';
 
 /**
@@ -95,6 +99,10 @@ export type Availability = {
   reason?: UnavailableReason;
   /** Additional message for unknown reasons */
   message?: string;
+  /** OS version string (e.g., "27.0") — iOS 26.0+ */
+  osVersion?: string;
+  /** Feature flags reported by native (token counting: iOS 26.4+) */
+  features?: FoundationModelsFeatures;
 };
 
 /**
@@ -792,6 +800,53 @@ export type LocaleInfo = {
   preferredLanguages: string[];
   /** Calendar identifier */
   calendar: string;
+};
+
+// MARK: - iOS 26.4 Feature Types
+
+/**
+ * Feature flags reported by `getAvailability()`.
+ *
+ * All flags are `false` on OS versions below the feature's minimum:
+ * - `tokenCounting`: iOS 26.4+
+ */
+export type FoundationModelsFeatures = {
+  /** Token counting via getTokenCount (iOS 26.4+) */
+  tokenCounting: boolean;
+};
+
+/**
+ * Normalized error codes shared across native and TS layers.
+ *
+ * Native maps every generation/session/model failure to exactly one of these,
+ * identically on iOS 26 and iOS 27 devices.
+ */
+export type FoundationModelsErrorCode =
+  | 'contextSizeExceeded'
+  | 'rateLimited'
+  | 'refusal'
+  | 'guardrailViolation'
+  | 'unsupportedLanguageOrLocale'
+  | 'unsupportedCapability'
+  | 'assetsUnavailable'
+  | 'concurrentRequests'
+  | 'timeout'
+  | 'transcriptMutationWhileResponding'
+  | 'unsupportedGenerationGuide'
+  | 'decodingFailure'
+  | 'featureUnavailable'
+  | 'unknown';
+
+/**
+ * Normalized error object carried by native failures.
+ */
+export type FoundationModelsErrorObject = {
+  /** Normalized, stable error code */
+  code: FoundationModelsErrorCode;
+  /** Human-readable error message */
+  message: string;
+  /** Minimum OS version hint when the failure is availability-related */
+  osHint?: string;
 };
 
 /**

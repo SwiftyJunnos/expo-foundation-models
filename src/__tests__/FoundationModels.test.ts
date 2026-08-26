@@ -103,6 +103,10 @@ describe('FoundationModels', () => {
         available: false,
         status: 'unavailable',
         reason: 'platformNotSupported',
+        osVersion: expect.any(String),
+        features: {
+          tokenCounting: false,
+        },
       });
       expect(mockModule.getAvailability).not.toHaveBeenCalled();
     });
@@ -319,6 +323,10 @@ describe('FoundationModels', () => {
         message: 'Refusal error',
         refusalExplanation: 'Cannot generate harmful content',
         context: undefined,
+        cause: undefined,
+        causeExplanation: 'An unknown error occurred.',
+        diagnostics: undefined,
+        suggestions: [],
       });
     });
 

@@ -11,6 +11,7 @@ jest.mock('react-native', () => ({
 // Mock the native module
 jest.mock('./src/ExpoFoundationModelsModule', () => ({
   __esModule: true,
+  isNativeModuleAvailable: jest.fn(() => true),
   default: {
     // CoreML functions
     loadModel: jest.fn(),
@@ -19,9 +20,11 @@ jest.mock('./src/ExpoFoundationModelsModule', () => ({
     isModelLoaded: jest.fn(),
     getLoadedModels: jest.fn(),
 
-    // Foundation Models functions
     isAvailable: jest.fn(),
     getAvailability: jest.fn(),
+    getLocaleInfo: jest.fn(),
+    getTokenCount: jest.fn(),
+    getContextSize: jest.fn(),
     createSession: jest.fn(),
     closeSession: jest.fn(),
     respond: jest.fn(),

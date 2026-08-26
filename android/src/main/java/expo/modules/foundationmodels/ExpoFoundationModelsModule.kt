@@ -48,9 +48,23 @@ class ExpoFoundationModelsModule : Module() {
             mapOf(
                 "available" to false,
                 "status" to "unavailable",
-                "reason" to "platformNotSupported"
+                "reason" to "platformNotSupported",
+                "osVersion" to android.os.Build.VERSION.RELEASE,
+                "features" to mapOf(
+                    "tokenCounting" to false
+                )
             )
         }
+
+
+        AsyncFunction("getTokenCount") { text: String, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("getContextSize") { promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
 
         AsyncFunction("createSession") { instructions: String?, promise: Promise ->
             promise.reject(PlatformNotSupportedException())

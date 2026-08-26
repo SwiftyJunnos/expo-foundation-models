@@ -624,7 +624,40 @@ enum FMErrorType: String {
     case guardrailViolation = "guardrailViolation"
     case refusal = "refusal"
     case unsupportedLanguage = "unsupportedLanguage"
+    case featureUnavailable = "featureUnavailable"
     case unknown = "unknown"
+}
+
+extension FMErrorType {
+    /// Default normalized code for legacy error types.
+    var defaultNormalizedCode: FMNormalizedErrorCode {
+        switch self {
+        case .guardrailViolation: return .guardrailViolation
+        case .refusal: return .refusal
+        case .unsupportedLanguage: return .unsupportedLanguageOrLocale
+        case .notAvailable, .sessionNotFound, .featureUnavailable: return .unsupportedCapability
+        case .generationFailed, .streamingFailed, .unknown: return .unknown
+        }
+    }
+}
+
+/// Normalized error codes (single source of truth, shared with the TS facade).
+/// Every generation/session/model failure maps to exactly one of these so that
+/// iOS 26 and iOS 27 devices report identical wire-level error codes.
+enum FMNormalizedErrorCode: String {
+    case contextSizeExceeded
+    case rateLimited
+    case refusal
+    case guardrailViolation
+    case unsupportedLanguageOrLocale
+    case unsupportedCapability
+    case assetsUnavailable
+    case concurrentRequests
+    case timeout
+    case transcriptMutationWhileResponding
+    case unsupportedGenerationGuide
+    case decodingFailure
+    case unknown
 }
 
 /// Errors for Foundation Models operations
@@ -633,12 +666,15 @@ struct FoundationModelsManagerError: Error, LocalizedError {
     let message: String
     let refusalExplanation: String?
     let context: String?
+    /// Normalized wire-level error code (see FMNormalizedErrorCode).
+    let normalizedCode: FMNormalizedErrorCode
 
-    init(type: FMErrorType, message: String, refusalExplanation: String? = nil, context: String? = nil) {
+    init(type: FMErrorType, message: String, refusalExplanation: String? = nil, context: String? = nil, normalizedCode: FMNormalizedErrorCode? = nil) {
         self.type = type
         self.message = message
         self.refusalExplanation = refusalExplanation
         self.context = context
+        self.normalizedCode = normalizedCode ?? type.defaultNormalizedCode
     }
 
     static let notAvailable = FoundationModelsManagerError(
@@ -689,12 +725,20 @@ struct FoundationModelsManagerError: Error, LocalizedError {
         )
     }
 
+    static func featureUnavailable(_ reason: String) -> FoundationModelsManagerError {
+        return FoundationModelsManagerError(
+            type: .featureUnavailable,
+            message: reason
+        )
+    }
+
     var errorDescription: String? { message }
 
     /// Convert to dictionary for JavaScript
     func toDict() -> [String: Any] {
         var dict: [String: Any] = [
             "type": type.rawValue,
+            "code": normalizedCode.rawValue,
             "message": message
         ]
         if let explanation = refusalExplanation {
@@ -704,6 +748,24 @@ struct FoundationModelsManagerError: Error, LocalizedError {
             dict["context"] = ctx
         }
         return dict
+    }
+}
+
+extension FoundationModelsManagerError: CustomNSError {
+    static var errorDomain: String { "ExpoFoundationModels" }
+
+    var errorCode: Int {
+        let allCases: [FMNormalizedErrorCode] = [
+            .contextSizeExceeded, .rateLimited, .refusal, .guardrailViolation,
+            .unsupportedLanguageOrLocale, .unsupportedCapability, .assetsUnavailable,
+            .concurrentRequests, .timeout, .transcriptMutationWhileResponding,
+            .unsupportedGenerationGuide, .decodingFailure, .unknown
+        ]
+        return allCases.firstIndex(of: normalizedCode) ?? allCases.count - 1
+    }
+
+    var errorUserInfo: [String: Any] {
+        return ["code": normalizedCode.rawValue]
     }
 }
 
@@ -1179,13 +1241,34 @@ struct FMGenerationOptions {
             }
         }
 
-        return GenerationOptions(
+        var nativeOptions = GenerationOptions(
             sampling: samplingMode,
             temperature: temperature,
             maximumResponseTokens: maximumResponseTokens
         )
+
+        return nativeOptions
     }
+
     #endif
+}
+
+/// Prompt input accepted by every generation method: a plain string or a
+/// `{ text }` object.
+struct FMPrompt: Convertible {
+    var text: String
+
+    static func convert(from value: Any?, appContext: AppContext) throws -> FMPrompt {
+        if let text = value as? String {
+            return FMPrompt(text: text)
+        }
+        if let dict = value as? [String: Any], let text = dict["text"] as? String {
+            return FMPrompt(text: text)
+        }
+        throw FoundationModelsManagerError.generationFailed(
+            "prompt must be a string or an object of the form { text: string }"
+        )
+    }
 }
 
 /// Manager for Apple's Foundation Models framework
@@ -1247,48 +1330,80 @@ final class FoundationModelsManager: @unchecked Sendable {
 
     /// Get detailed availability information
     func getAvailability() -> [String: Any] {
+        var info: [String: Any]
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
             let model = SystemLanguageModel.default
             switch model.availability {
             case .available:
-                return [
+                info = [
                     "available": true,
                     "status": "available"
                 ]
             case .unavailable(.deviceNotEligible):
-                return [
+                info = [
                     "available": false,
                     "status": "unavailable",
                     "reason": "deviceNotEligible"
                 ]
             case .unavailable(.appleIntelligenceNotEnabled):
-                return [
+                info = [
                     "available": false,
                     "status": "unavailable",
                     "reason": "appleIntelligenceNotEnabled"
                 ]
             case .unavailable(.modelNotReady):
-                return [
+                info = [
                     "available": false,
                     "status": "unavailable",
                     "reason": "modelNotReady"
                 ]
             case .unavailable(let reason):
-                return [
+                info = [
                     "available": false,
                     "status": "unavailable",
                     "reason": "unknown",
                     "message": String(describing: reason)
                 ]
             }
+        } else {
+            info = [
+                "available": false,
+                "status": "unavailable",
+                "reason": "platformNotSupported"
+            ]
         }
-        #endif
-        return [
+        #else
+        info = [
             "available": false,
             "status": "unavailable",
             "reason": "platformNotSupported"
         ]
+        #endif
+        info["osVersion"] = Self.osVersionString()
+        info["features"] = Self.featureFlags()
+        return info
+    }
+
+    /// OS version formatted as "major.minor[.patch]" (e.g. "27.0").
+    static func osVersionString() -> String {
+        let v = ProcessInfo.processInfo.operatingSystemVersion
+        var version = "\(v.majorVersion).\(v.minorVersion)"
+        if v.patchVersion > 0 {
+            version += ".\(v.patchVersion)"
+        }
+        return version
+    }
+
+    /// Feature flags for the iOS 26.4 feature set.
+    static func featureFlags() -> [String: Bool] {
+        var features = [
+            "tokenCounting": false
+        ]
+        if #available(iOS 26.4, macOS 26.4, *) {
+            features["tokenCounting"] = true
+        }
+        return features
     }
 
     /// Get detailed availability diagnostics with root cause and suggestions
@@ -1462,19 +1577,17 @@ final class FoundationModelsManager: @unchecked Sendable {
     }
 
     /// Generate a response
-    func respondAsync(sessionId: String, prompt: String, options: FMGenerationOptions) async throws -> String {
+    func respondAsync(sessionId: String, prompt: FMPrompt, options: FMGenerationOptions) async throws -> String {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
             let session = try getSession(sessionId)
 
             do {
                 let nativeOptions = options.toNativeOptions()
-                let response = try await session.respond(to: prompt, options: nativeOptions)
+                let response = try await session.respond(to: Prompt(prompt.text), options: nativeOptions)
                 return response.content
-            } catch let error as LanguageModelSession.GenerationError {
-                throw mapGenerationError(error)
             } catch {
-                throw FoundationModelsManagerError.generationFailed(error.localizedDescription)
+                throw Self.mapUnderlyingError(error, fallbackType: .generationFailed)
             }
         }
         #endif
@@ -1484,7 +1597,7 @@ final class FoundationModelsManager: @unchecked Sendable {
     /// Stream a response with token callback
     func streamResponseAsync(
         sessionId: String,
-        prompt: String,
+        prompt: FMPrompt,
         options: FMGenerationOptions,
         onToken: @escaping (String) -> Void
     ) async throws -> String {
@@ -1495,7 +1608,7 @@ final class FoundationModelsManager: @unchecked Sendable {
             do {
                 var fullResponse = ""
                 let nativeOptions = options.toNativeOptions()
-                let stream = session.streamResponse(to: prompt, options: nativeOptions)
+                let stream = session.streamResponse(to: Prompt(prompt.text), options: nativeOptions)
 
                 for try await partialResponse in stream {
                     let newContent = partialResponse.content
@@ -1507,58 +1620,142 @@ final class FoundationModelsManager: @unchecked Sendable {
                 }
 
                 return fullResponse
-            } catch let error as LanguageModelSession.GenerationError {
-                throw mapGenerationError(error)
             } catch {
-                throw FoundationModelsManagerError.streamingFailed(error.localizedDescription)
+                throw Self.mapUnderlyingError(error, fallbackType: .streamingFailed)
             }
         }
         #endif
         throw FoundationModelsManagerError.notAvailable
     }
 
-    /// Map native GenerationError to our error type
-    #if canImport(FoundationModels)
-    @available(iOS 26.0, macOS 26.0, *)
-    private func mapGenerationError(_ error: LanguageModelSession.GenerationError) -> FoundationModelsManagerError {
-        switch error {
-        case .guardrailViolation(let context):
-            return .guardrailViolation(context.debugDescription)
-        case .refusal(_, let context):
-            // Note: Getting explanation is async, so we can't easily include it here
-            // The explanation would need to be fetched separately if needed
-            return .refusal(explanation: nil, context: context.debugDescription)
-        case .unsupportedLanguageOrLocale(let context):
-            return .unsupportedLanguage(context.debugDescription)
-        case .exceededContextWindowSize(let context):
+    /// Map any underlying Foundation Models failure to a normalized error.
+    ///
+    /// `LanguageModelSession.GenerationError` is obsoleted by the iOS 27 SDK, so typed
+    /// matching against it is gone. Instead we map the iOS 27-only replacement types
+    /// (`LanguageModelError`, `SystemLanguageModel.Error`, `LanguageModelSession.Error`)
+    /// inside an availability check and fall back to stable message heuristics that
+    /// behave identically on iOS 26 and iOS 27.
+    static func mapUnderlyingError(
+        _ error: Error,
+        fallbackType: FMErrorType
+    ) -> FoundationModelsManagerError {
+        // Already-normalized manager errors pass through unchanged.
+        if let managed = error as? FoundationModelsManagerError {
+            return managed
+        }
+
+        var code: FMNormalizedErrorCode?
+        var detail = error.localizedDescription
+        #if canImport(FoundationModels)
+        if #available(iOS 27.0, macOS 27.0, *) {
+            switch error {
+            case let modelError as LanguageModelError:
+                switch modelError {
+                case .contextSizeExceeded(let context):
+                    code = .contextSizeExceeded
+                    detail = context.debugDescription
+                case .rateLimited(let context):
+                    code = .rateLimited
+                    detail = context.debugDescription
+                case .guardrailViolation(let context):
+                    code = .guardrailViolation
+                    detail = context.debugDescription
+                case .refusal(let refusal):
+                    code = .refusal
+                    detail = refusal.debugDescription
+                case .unsupportedCapability(let context):
+                    code = .unsupportedCapability
+                    detail = context.debugDescription
+                case .unsupportedLanguageOrLocale(let context):
+                    code = .unsupportedLanguageOrLocale
+                    detail = context.debugDescription
+                case .unsupportedGenerationGuide(let context):
+                    code = .unsupportedGenerationGuide
+                    detail = context.debugDescription
+                case .timeout(let context):
+                    code = .timeout
+                    detail = context.debugDescription
+                case .unsupportedTranscriptContent:
+                    break
+                @unknown default:
+                    break
+                }
+            case let systemError as SystemLanguageModel.Error:
+                if case .assetsUnavailable(let assets) = systemError {
+                    code = .assetsUnavailable
+                    detail = assets.debugDescription
+                }
+            case let sessionError as LanguageModelSession.Error:
+                switch sessionError {
+                case .concurrentRequests:
+                    code = .concurrentRequests
+                case .transcriptMutationWhileResponding:
+                    code = .transcriptMutationWhileResponding
+                @unknown default:
+                    break
+                }
+                detail = sessionError.localizedDescription
+            default:
+                break
+            }
+        }
+        #endif
+
+        // Message-based normalization shared by iOS 26 and iOS 27.
+        if code == nil {
+            let message = detail.lowercased()
+            if message.contains("context") && (message.contains("exceed") || message.contains("window"))
+                || message.contains("too long") {
+                code = .contextSizeExceeded
+            } else if message.contains("rate limit") || message.contains("too many requests") || message.contains("throttl") {
+                code = .rateLimited
+            } else if message.contains("refus") {
+                code = .refusal
+            } else if message.contains("guardrail") || message.contains("safety filter") || message.contains("sensitive") {
+                code = .guardrailViolation
+            } else if message.contains("language") || message.contains("locale") {
+                code = .unsupportedLanguageOrLocale
+            } else if message.contains("concurrent") || message.contains("already responding")
+                || message.contains("in progress") || message.contains("another generation") {
+                code = .concurrentRequests
+            } else if message.contains("timed out") || message.contains("timeout") {
+                code = .timeout
+            } else if message.contains("asset") || message.contains("not downloaded") || message.contains("download") {
+                code = .assetsUnavailable
+            } else if message.contains("generationguide") || message.contains("generation guide") {
+                code = .unsupportedGenerationGuide
+            } else if message.contains("decod") || message.contains("pars") {
+                code = .decodingFailure
+            } else if message.contains("not supported") || message.contains("unsupported") || message.contains("capability") {
+                code = .unsupportedCapability
+            } else {
+                code = .unknown
+            }
+        }
+
+        switch code ?? .unknown {
+        case .guardrailViolation:
+            return .guardrailViolation(detail)
+        case .refusal:
+            return .refusal(explanation: nil, context: detail)
+        case .unsupportedLanguageOrLocale:
+            return .unsupportedLanguage(detail)
+        default:
             return FoundationModelsManagerError(
-                type: .generationFailed,
-                message: "Exceeded context window size",
-                context: context.debugDescription
-            )
-        @unknown default:
-            return FoundationModelsManagerError(
-                type: .unknown,
-                message: error.localizedDescription
+                type: fallbackType,
+                message: detail,
+                normalizedCode: code ?? .unknown
             )
         }
     }
-    #endif
 
-    /// Generate structured output using a JSON schema
+    /// Generate structured output using a JSON schema.
     ///
-    /// **iOS 26 Beta Workaround:**
-    /// The `DynamicGenerationSchema` API doesn't support runtime schema construction in current betas.
-    /// Instead, we use a prompt-based approach:
-    /// 1. Include the JSON schema in the prompt
-    /// 2. Ask the model to generate JSON matching that schema
-    /// 3. Parse and validate the response
-    ///
-    /// This approach is less reliable than native schema enforcement but works with the current API.
+    /// The JSON schema is embedded in the prompt and the response is parsed.
     /// See: https://github.com/mcp-foundation/expo-foundation-models/issues/1
     func respondWithSchemaAsync(
         sessionId: String,
-        prompt: String,
+        prompt: FMPrompt,
         schema: [String: Any],
         options: FMGenerationOptions
     ) async throws -> [String: Any] {
@@ -1575,22 +1772,18 @@ final class FoundationModelsManager: @unchecked Sendable {
                 // Keep prompt minimal - just the user prompt + schema as JSON
                 // The session's system instructions should already specify output format
                 let structuredPrompt = """
-                \(prompt)
+                \(prompt.text)
 
                 JSON Schema: \(schemaString)
                 """
 
                 let nativeOptions = options.toNativeOptions()
                 let response = try await session.respond(to: structuredPrompt, options: nativeOptions)
-                
+
                 // Parse the JSON response - access .content from Response<String>
                 return try parseJsonResponse(response.content)
-            } catch let error as LanguageModelSession.GenerationError {
-                throw mapGenerationError(error)
-            } catch let error as FoundationModelsManagerError {
-                throw error
             } catch {
-                throw FoundationModelsManagerError.generationFailed(error.localizedDescription)
+                throw Self.mapUnderlyingError(error, fallbackType: .generationFailed)
             }
         }
         #endif
@@ -1604,7 +1797,7 @@ final class FoundationModelsManager: @unchecked Sendable {
     /// The model is asked to respond with exactly one of the provided choices.
     func respondWithChoicesAsync(
         sessionId: String,
-        prompt: String,
+        prompt: FMPrompt,
         choices: [String],
         options: FMGenerationOptions
     ) async throws -> String {
@@ -1619,47 +1812,41 @@ final class FoundationModelsManager: @unchecked Sendable {
 
                 // Keep prompt minimal - just user prompt + choices
                 let structuredPrompt = """
-                \(prompt)
+                \(prompt.text)
 
                 [\(choicesFormatted)]
                 """
 
                 let nativeOptions = options.toNativeOptions()
                 let response = try await session.respond(to: structuredPrompt, options: nativeOptions)
-                
+
                 // Clean up the response and validate it's one of the choices
                 // Access .content from Response<String>
                 let cleanedResponse = response.content.trimmingCharacters(in: .whitespacesAndNewlines)
                     .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-                
+
                 // Check if response matches one of the choices (case-insensitive for robustness)
                 if let matchedChoice = choices.first(where: { $0.lowercased() == cleanedResponse.lowercased() }) {
                     return matchedChoice
                 }
-                
+
                 // If no exact match, return the cleaned response (model might have chosen correctly)
                 // This allows for slight variations while still being useful
                 return cleanedResponse
-            } catch let error as LanguageModelSession.GenerationError {
-                throw mapGenerationError(error)
-            } catch let error as FoundationModelsManagerError {
-                throw error
             } catch {
-                throw FoundationModelsManagerError.generationFailed(error.localizedDescription)
+                throw Self.mapUnderlyingError(error, fallbackType: .generationFailed)
             }
         }
         #endif
         throw FoundationModelsManagerError.notAvailable
     }
 
-    /// Stream structured output with partial updates
+    /// Stream structured output with partial updates.
     ///
-    /// **iOS 26 Beta Workaround:**
-    /// Uses prompt-based streaming with JSON parsing on each chunk.
-    /// Partial results are emitted as the JSON is being constructed.
+    /// Prompt-based streaming with partial JSON parsing on each chunk.
     func streamWithSchemaAsync(
         sessionId: String,
-        prompt: String,
+        prompt: FMPrompt,
         schema: [String: Any],
         options: FMGenerationOptions,
         onPartial: @escaping ([String: Any]) -> Void
@@ -1676,46 +1863,43 @@ final class FoundationModelsManager: @unchecked Sendable {
 
                 // Keep prompt minimal - just the user prompt + schema as JSON
                 let structuredPrompt = """
-                \(prompt)
+                \(prompt.text)
 
                 JSON Schema: \(schemaString)
                 """
 
                 let nativeOptions = options.toNativeOptions()
                 let stream = session.streamResponse(to: structuredPrompt, options: nativeOptions)
-                
+
                 var accumulatedText = ""
                 var finalResult: [String: Any] = [:]
 
                 for try await partialResponse in stream {
                     // Access .content from the stream snapshot
                     accumulatedText = partialResponse.content
-                    
+
                     // Try to parse partial JSON (may fail for incomplete JSON, which is expected)
                     if let partial = tryParsePartialJson(accumulatedText) {
                         finalResult = partial
                         onPartial(partial)
                     }
                 }
-                
+
                 // Parse the final complete response
                 if let parsed = tryParsePartialJson(accumulatedText) {
                     return parsed
                 }
-                
+
                 // If parsing failed, try to extract JSON from the response
                 return try parseJsonResponse(accumulatedText)
-            } catch let error as LanguageModelSession.GenerationError {
-                throw mapGenerationError(error)
-            } catch let error as FoundationModelsManagerError {
-                throw error
             } catch {
-                throw FoundationModelsManagerError.streamingFailed(error.localizedDescription)
+                throw Self.mapUnderlyingError(error, fallbackType: .streamingFailed)
             }
         }
         #endif
         throw FoundationModelsManagerError.notAvailable
     }
+
 
     // MARK: - JSON Parsing Helpers
     // 
@@ -1823,25 +2007,6 @@ final class FoundationModelsManager: @unchecked Sendable {
         return nil
     }
 
-    #if canImport(FoundationModels)
-    @available(iOS 26.0, macOS 26.0, *)
-    private func decodeGeneratedContent(_ content: GeneratedContent) throws -> [String: Any] {
-        // Try to serialize through string representation
-        let jsonString = content.debugDescription
-        if let data = jsonString.data(using: .utf8),
-           let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-            return dict
-        }
-        throw FoundationModelsManagerError.generationFailed("Failed to decode generated content")
-    }
-
-    @available(iOS 26.0, macOS 26.0, *)
-    private func decodeGeneratedString(_ content: GeneratedContent) throws -> String {
-        // Fallback to debug description
-        return content.debugDescription.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-    }
-    #endif
-
     // MARK: - Tool Calling
 
     /// Create a session with tools
@@ -1897,7 +2062,7 @@ final class FoundationModelsManager: @unchecked Sendable {
     /// See: https://github.com/mcp-foundation/expo-foundation-models/issues/1
     func respondWithToolsAsync(
         sessionId: String,
-        prompt: String,
+        prompt: FMPrompt,
         options: FMGenerationOptions
     ) async throws -> [String: Any] {
         #if canImport(FoundationModels)
@@ -1908,21 +2073,21 @@ final class FoundationModelsManager: @unchecked Sendable {
                 // Get the tools from the session's configuration
                 // We need to build a prompt that includes tool information
                 let toolsPrompt = buildToolsPrompt(for: sessionId)
-                
+
                 let structuredPrompt = """
                 \(toolsPrompt)
 
-                User request: \(prompt)
+                User request: \(prompt.text)
 
                 If you need to use a tool to answer, respond with ONLY a JSON object in this exact format:
                 {"tool_call": {"name": "toolName", "arguments": {...}}}
 
                 If you can answer directly without a tool, just respond normally with text.
                 """
-                
+
                 let nativeOptions = options.toNativeOptions()
                 let response = try await session.respond(to: structuredPrompt, options: nativeOptions)
-                
+
                 // Try to parse as a tool call
                 if let toolCall = parseToolCallResponse(response.content) {
                     return [
@@ -1939,10 +2104,8 @@ final class FoundationModelsManager: @unchecked Sendable {
                     "type": "text",
                     "content": response.content
                 ]
-            } catch let error as LanguageModelSession.GenerationError {
-                throw mapGenerationError(error)
             } catch {
-                throw FoundationModelsManagerError.generationFailed(error.localizedDescription)
+                throw Self.mapUnderlyingError(error, fallbackType: .generationFailed)
             }
         }
         #endif
@@ -1989,30 +2152,26 @@ final class FoundationModelsManager: @unchecked Sendable {
                 
                 Please use this information to provide a helpful response to the user's original question.
                 """
-                
                 let response = try await session.respond(to: prompt)
-                
+
                 return [
                     "type": "text",
                     "content": response.content
                 ]
-            } catch let error as LanguageModelSession.GenerationError {
-                throw mapGenerationError(error)
             } catch {
-                throw FoundationModelsManagerError.generationFailed(error.localizedDescription)
+                throw Self.mapUnderlyingError(error, fallbackType: .generationFailed)
             }
         }
         #endif
         throw FoundationModelsManagerError.notAvailable
     }
-
     /// Stream response with tool support
     ///
     /// **iOS 26 Beta Workaround:**
     /// Uses prompt-based tool calling with streaming.
     func streamWithToolsAsync(
         sessionId: String,
-        prompt: String,
+        prompt: FMPrompt,
         options: FMGenerationOptions,
         onToken: @escaping (String) -> Void,
         onToolCall: @escaping ([String: Any]) -> Void
@@ -2028,7 +2187,7 @@ final class FoundationModelsManager: @unchecked Sendable {
                 let structuredPrompt = """
                 \(toolsPrompt)
 
-                User request: \(prompt)
+                User request: \(prompt.text)
 
                 If you need to use a tool to answer, respond with ONLY a JSON object in this exact format:
                 {"tool_call": {"name": "toolName", "arguments": {...}}}
@@ -2067,10 +2226,8 @@ final class FoundationModelsManager: @unchecked Sendable {
                     "type": "text",
                     "content": fullResponse
                 ]
-            } catch let error as LanguageModelSession.GenerationError {
-                throw mapGenerationError(error)
             } catch {
-                throw FoundationModelsManagerError.streamingFailed(error.localizedDescription)
+                throw Self.mapUnderlyingError(error, fallbackType: .streamingFailed)
             }
         }
         #endif
@@ -2412,6 +2569,34 @@ final class FoundationModelsManager: @unchecked Sendable {
         throw FoundationModelsManagerError.notAvailable
     }
 
+    // MARK: - Token / Context Introspection
+
+    /// Count tokens for a prompt (iOS 26.4+).
+    func getTokenCountAsync(text: String) async throws -> Int {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.4, macOS 26.4, *) {
+            do {
+                return try await SystemLanguageModel.default.tokenCount(for: text)
+            } catch {
+                throw Self.mapUnderlyingError(error, fallbackType: .generationFailed)
+            }
+        }
+        #endif
+        throw FoundationModelsManagerError.featureUnavailable(
+            "Token counting requires iOS 26.4 or later"
+        )
+    }
+
+    /// Get the model context window size (iOS 26.4+); null below.
+    func getContextSizeAsync() async throws -> Int? {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.4, macOS 26.4, *) {
+            return SystemLanguageModel.default.contextSize
+        }
+        #endif
+        return nil
+    }
+
     // MARK: - Adapter Management
 
     /// Load an adapter by name from Background Assets
@@ -2615,6 +2800,7 @@ final class FoundationModelsManager: @unchecked Sendable {
 // MARK: - Dynamic Tool
 
 #if canImport(FoundationModels)
+
 @available(iOS 26.0, macOS 26.0, *)
 private struct DynamicTool: Tool, @unchecked Sendable {
     // Note: @unchecked Sendable is used because [String: Any] contains Any which is not Sendable.
@@ -2729,7 +2915,7 @@ public class ExpoFoundationModelsModule: Module {
             try FoundationModelsManager.shared.closeSession(sessionId: sessionId)
         }
 
-        AsyncFunction("respond") { (sessionId: String, prompt: String, options: [String: Any]?) -> String in
+        AsyncFunction("respond") { (sessionId: String, prompt: FMPrompt, options: [String: Any]?) -> String in
             let genOptions = FMGenerationOptions.from(dictionary: options)
             return try await FoundationModelsManager.shared.respondAsync(
                 sessionId: sessionId,
@@ -2738,7 +2924,7 @@ public class ExpoFoundationModelsModule: Module {
             )
         }
 
-        AsyncFunction("streamResponse") { (sessionId: String, prompt: String, options: [String: Any]?) -> String in
+        AsyncFunction("streamResponse") { (sessionId: String, prompt: FMPrompt, options: [String: Any]?) -> String in
             let genOptions = FMGenerationOptions.from(dictionary: options)
             return try await FoundationModelsManager.shared.streamResponseAsync(
                 sessionId: sessionId,
@@ -2755,7 +2941,7 @@ public class ExpoFoundationModelsModule: Module {
 
         // MARK: - Structured Output Functions
 
-        AsyncFunction("respondWithSchema") { (sessionId: String, prompt: String, schema: [String: Any], options: [String: Any]?) -> [String: Any] in
+        AsyncFunction("respondWithSchema") { (sessionId: String, prompt: FMPrompt, schema: [String: Any], options: [String: Any]?) -> [String: Any] in
             let genOptions = FMGenerationOptions.from(dictionary: options)
             return try await FoundationModelsManager.shared.respondWithSchemaAsync(
                 sessionId: sessionId,
@@ -2765,7 +2951,7 @@ public class ExpoFoundationModelsModule: Module {
             )
         }
 
-        AsyncFunction("respondWithChoices") { (sessionId: String, prompt: String, choices: [String], options: [String: Any]?) -> String in
+        AsyncFunction("respondWithChoices") { (sessionId: String, prompt: FMPrompt, choices: [String], options: [String: Any]?) -> String in
             let genOptions = FMGenerationOptions.from(dictionary: options)
             return try await FoundationModelsManager.shared.respondWithChoicesAsync(
                 sessionId: sessionId,
@@ -2775,7 +2961,7 @@ public class ExpoFoundationModelsModule: Module {
             )
         }
 
-        AsyncFunction("streamWithSchema") { (sessionId: String, prompt: String, schema: [String: Any], options: [String: Any]?) -> [String: Any] in
+        AsyncFunction("streamWithSchema") { (sessionId: String, prompt: FMPrompt, schema: [String: Any], options: [String: Any]?) -> [String: Any] in
             let genOptions = FMGenerationOptions.from(dictionary: options)
             return try await FoundationModelsManager.shared.streamWithSchemaAsync(
                 sessionId: sessionId,
@@ -2797,7 +2983,7 @@ public class ExpoFoundationModelsModule: Module {
             return try await FoundationModelsManager.shared.createSessionWithToolsAsync(options: options)
         }
 
-        AsyncFunction("respondWithTools") { (sessionId: String, prompt: String, options: [String: Any]?) -> [String: Any] in
+        AsyncFunction("respondWithTools") { (sessionId: String, prompt: FMPrompt, options: [String: Any]?) -> [String: Any] in
             let genOptions = FMGenerationOptions.from(dictionary: options)
             return try await FoundationModelsManager.shared.respondWithToolsAsync(
                 sessionId: sessionId,
@@ -2813,7 +2999,7 @@ public class ExpoFoundationModelsModule: Module {
             )
         }
 
-        AsyncFunction("streamWithTools") { (sessionId: String, prompt: String, options: [String: Any]?) -> [String: Any] in
+        AsyncFunction("streamWithTools") { (sessionId: String, prompt: FMPrompt, options: [String: Any]?) -> [String: Any] in
             let genOptions = FMGenerationOptions.from(dictionary: options)
             return try await FoundationModelsManager.shared.streamWithToolsAsync(
                 sessionId: sessionId,
@@ -2832,6 +3018,16 @@ public class ExpoFoundationModelsModule: Module {
                     ])
                 }
             )
+        }
+
+        // MARK: - Model Introspection Functions
+
+        AsyncFunction("getTokenCount") { (text: String) -> Int in
+            return try await FoundationModelsManager.shared.getTokenCountAsync(text: text)
+        }
+
+        AsyncFunction("getContextSize") { () -> Int? in
+            return try await FoundationModelsManager.shared.getContextSizeAsync()
         }
 
         // MARK: - Session Management Functions

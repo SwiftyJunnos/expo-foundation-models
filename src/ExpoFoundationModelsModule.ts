@@ -16,6 +16,7 @@ import type {
   InputValidationResult,
   JSONSchema,
   LoadAdapterOptions,
+  LocaleInfo,
   MLDictionary,
   PrewarmOptions,
   SessionDiagnostics,
@@ -45,6 +46,8 @@ declare class ExpoFoundationModelsModuleType extends NativeModule<ExpoFoundation
   getAvailabilityDiagnostics(): AvailabilityDiagnostics;
   getSessionDiagnostics(sessionId: string): Promise<SessionDiagnostics>;
 
+  getLocaleInfo(): LocaleInfo;
+
   // Foundation Models - Session Management
   createSession(instructions: string | null): Promise<string>;
   createSessionWithConfig(options: ExtendedSessionOptions): Promise<string>;
@@ -54,8 +57,16 @@ declare class ExpoFoundationModelsModuleType extends NativeModule<ExpoFoundation
   getTranscript(sessionId: string): Promise<TranscriptEntry[]>;
   prewarm(sessionId: string, options: PrewarmOptions | null): Promise<void>;
 
+  // Foundation Models - Token Introspection (iOS 26.4+)
+  getTokenCount(text: string): Promise<number>;
+  getContextSize(): Promise<number | null>;
+
   // Foundation Models - Text Generation
-  respond(sessionId: string, prompt: string, options: GenerationOptions | null): Promise<string>;
+  respond(
+    sessionId: string,
+    prompt: string,
+    options: GenerationOptions | null
+  ): Promise<string>;
   streamResponse(
     sessionId: string,
     prompt: string,
