@@ -445,4 +445,83 @@ describe('FoundationModels iOS 27 features', () => {
       expect(mockModule.createSession).toHaveBeenCalledWith('You are helpful');
     });
   });
+
+  describe('createSession PCC configuration', () => {
+    // PCC sessions accept a narrower configuration than on-device sessions:
+    // contentTagging useCase, permissive guardrails, and adapter-backed models
+    // are rejected natively with featureUnavailable. The facade's job is to
+    // forward every option unchanged so the native layer can reject precisely.
+    it.each([
+      ['useCase: contentTagging', { useCase: 'contentTagging' as const }],
+      [
+        'guardrails: permissiveContentTransformations',
+        { guardrails: 'permissiveContentTransformations' as const },
+      ],
+      ['adapterId', { adapterId: 'adapter-123' }],
+    ])(
+      'should forward %s unchanged so native can reject it for PCC sessions',
+      async (_label, unsupported) => {
+        mockModule.createSessionWithConfig.mockResolvedValue('session-pcc');
+
+        await FoundationModels.createSession({
+          instructions: 'You are helpful',
+          ...unsupported,
+        });
+
+        expect(mockModule.createSessionWithConfig).toHaveBeenCalledWith(
+          expect.objectContaining(unsupported)
+        );
+      }
+    );
+
+    it('should forward supported PCC configuration (default guardrails, general useCase, tools) unchanged', async () => {
+      mockModule.createSessionWithConfig.mockResolvedValue('session-pcc');
+      const tools = [
+        {
+          name: 'getWeather',
+          description: 'Get current weather',
+          parameters: {
+            type: 'object' as const,
+            properties: { city: { type: 'string' as const } },
+            required: ['city'],
+          },
+        },
+      ];
+
+      await FoundationModels.createSession({
+        instructions: 'You are helpful',
+        guardrails: 'default',
+        useCase: 'general',
+        tools,
+        model: { type: 'privateCloudCompute' },
+      });
+
+      expect(mockModule.createSessionWithConfig).toHaveBeenCalledWith({
+        instructions: 'You are helpful',
+        guardrails: 'default',
+        useCase: 'general',
+        tools,
+        adapterId: undefined,
+        model: { type: 'privateCloudCompute' },
+      });
+    });
+
+    it('should surface native featureUnavailable rejections of unsupported PCC configuration as notAvailable errors', async () => {
+      mockModule.createSessionWithConfig.mockRejectedValue(
+        nativeErrorWithCode(
+          "Session option 'useCase: contentTagging' is not supported by Private Cloud Compute",
+          'featureUnavailable'
+        )
+      );
+
+      const error = await FoundationModels.createSession({
+        instructions: 'You are helpful',
+        useCase: 'contentTagging',
+      }).catch((e) => e);
+
+      expect(error).toBeInstanceOf(FoundationModelsError);
+      expect(error.type).toBe('notAvailable');
+      expect(error.errorCode).toBe('featureUnavailable');
+    });
+  });
 });

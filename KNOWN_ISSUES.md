@@ -209,7 +209,9 @@ The following iOS 27 APIs are intentionally **not supported** by this library:
 - **Adapters on iOS 27+:** `SystemLanguageModel(adapter:)` was obsoleted in the iOS 27
   SDK with no replacement. On iOS 27+ a session created with `adapterId` silently falls
   back to the default system model; on iOS ≤26 adapter sessions behave as before.
-  Adapter loading/compilation APIs remain functional.
+  Within Private Cloud Compute sessions (`model.type: 'privateCloudCompute'`) an
+  `adapterId` is rejected outright with the `featureUnavailable` error code instead of
+  being silently ignored. Adapter loading/compilation APIs remain functional.
 
 ---
 

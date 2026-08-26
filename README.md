@@ -145,6 +145,12 @@ if (features.features.tokenCounting) {
 > error if the model does not produce a tool call; `'disallowed'` omits tool
 > definitions entirely and always returns plain text.
 
+> **PCC session configuration:** PCC sessions support `instructions`, prompt-based
+> `tools`, default (or omitted) guardrails, and the `general` (or omitted) use case.
+> `useCase: 'contentTagging'`, `guardrails: 'permissiveContentTransformations'`,
+> and `adapterId` reject with the `featureUnavailable` error code instead of being
+> silently ignored. See [docs/foundation-models.md](./docs/foundation-models.md).
+
 On devices below the minimum OS for a capability, calling the corresponding method
 rejects with error code `featureUnavailable` instead of crashing — always check
 the flag first.

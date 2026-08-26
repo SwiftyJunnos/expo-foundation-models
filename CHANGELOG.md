@@ -32,6 +32,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tool calling on every supported OS version via the JavaScript-driven prompt flow:
   the model returns a parsed JSON tool call, the app executes the tool, and
   `submitToolResult` continues generation with the result
+- Native tool-call payload validation shared by `respondWithTools` and
+  `streamWithTools`: `name` must be a non-empty string matching a tool registered
+  for the session and `arguments` must be a JSON object; a parsed but invalid
+  tool call rejects with a normalized `generationFailed` error and is never
+  delivered to JavaScript. `'disallowed'` never parses or emits tool calls
 - Example app "iOS 27" tab demonstrating all new capabilities behind `getFeatures()` guards
 
 ### Changed
@@ -55,6 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output; `'disallowed'` omits tool definitions and tool-call instructions entirely;
   `'allowed'` (default) keeps the optional flow. No executable `DynamicTool` is
   registered natively — JavaScript and `submitToolResult` stay authoritative
+- PCC sessions validate their configuration instead of silently ignoring
+  unsupported options: `createSession({ model: { type: 'privateCloudCompute' }, … })`
+  rejects with the `featureUnavailable` error code when given
+  `useCase: 'contentTagging'`, `guardrails: 'permissiveContentTransformations'`,
+  or an `adapterId`. Omitted/default guardrails, omitted/`'general'` use case,
+  instructions, and prompt-based tools remain supported on PCC sessions
 - Non-string JSON Schema enums (numeric, boolean, or mixed values) are forwarded to
   native unchanged; when iOS 27 schema conversion cannot express them safely they
   throw there so the existing prompt-based fallback preserves the enum constraint

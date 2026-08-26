@@ -305,6 +305,38 @@ describe('FoundationModels - Structured Output', () => {
       );
     });
 
+    it('should surface the normalized feature error when schema fallback cannot honor includeSchemaInPrompt: false', async () => {
+      // Native wire shape: FMErrorType 'featureUnavailable' + normalized code
+      // 'featureUnavailable', thrown before any generation when the schema needs
+      // the prompt fallback (e.g. scalar constraints) but the caller asked to
+      // omit the schema from the prompt.
+      const constrainedSchema: JSONSchema = {
+        type: 'object',
+        properties: { name: { type: 'string', minLength: 1 } },
+        required: ['name'],
+      };
+      mockModule.respondWithSchema.mockRejectedValue(
+        Object.assign(
+          new Error(
+            'Cannot honor contextOptions.includeSchemaInPrompt = false: the JSON Schema could not be converted to a native generation schema, so the prompt-based fallback must include the schema to preserve structured output'
+          ),
+          { type: 'featureUnavailable', code: 'featureUnavailable' }
+        )
+      );
+
+      const error = await FoundationModels.respondWithSchema(
+        'session-123',
+        'Generate a name',
+        constrainedSchema,
+        { contextOptions: { includeSchemaInPrompt: false } }
+      ).catch((e) => e);
+
+      expect(error).toBeInstanceOf(FoundationModelsError);
+      expect(error.type).toBe('notAvailable');
+      expect(error.errorCode).toBe('featureUnavailable');
+      expect(error.cause).toBe('unsupportedOSVersion');
+    });
+
 
     it('should throw FoundationModelsError when session ID is empty', async () => {
       await expect(
@@ -563,6 +595,34 @@ describe('FoundationModels - Structured Output', () => {
         simpleSchema,
         options
       );
+    });
+
+    it('should surface the normalized feature error when schema fallback cannot honor includeSchemaInPrompt: false', async () => {
+      const constrainedSchema: JSONSchema = {
+        type: 'object',
+        properties: { title: { type: 'string', maxLength: 80 } },
+        required: ['title'],
+      };
+      mockModule.streamWithSchema.mockRejectedValue(
+        Object.assign(
+          new Error(
+            'Cannot honor contextOptions.includeSchemaInPrompt = false: the JSON Schema could not be converted to a native generation schema, so the prompt-based fallback must include the schema to preserve structured output'
+          ),
+          { type: 'featureUnavailable', code: 'featureUnavailable' }
+        )
+      );
+
+      const error = await FoundationModels.streamWithSchema(
+        'session-123',
+        'Generate a post',
+        constrainedSchema,
+        jest.fn(),
+        { contextOptions: { includeSchemaInPrompt: false } }
+      ).catch((e) => e);
+
+      expect(error).toBeInstanceOf(FoundationModelsError);
+      expect(error.type).toBe('notAvailable');
+      expect(error.errorCode).toBe('featureUnavailable');
     });
 
     it('should resolve a valid empty object as the final value even when no partial was emitted', async () => {

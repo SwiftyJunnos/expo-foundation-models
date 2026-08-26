@@ -322,6 +322,13 @@ const sessionId = await FoundationModels.createSession({
 });
 ```
 
+> **PCC sessions:** sessions backed by `model: { type: 'privateCloudCompute' }`
+> accept only `instructions`, prompt-based `tools`, default/omitted guardrails,
+> and the omitted/`general` use case. `guardrails:
+> 'permissiveContentTransformations'`, `useCase: 'contentTagging'`, and
+> `adapterId` reject with the `featureUnavailable` error code on PCC sessions;
+> they remain fully supported for on-device sessions as documented above.
+
 ---
 
 ## Phase 6: Adapters / Fine-tuned Models (Low Priority)

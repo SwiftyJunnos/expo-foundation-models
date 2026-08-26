@@ -228,6 +228,44 @@ describe('FoundationModels - Tool Calling', () => {
         toolCallingMode: 'disallowed',
       });
     });
+
+    it('should pass valid tool call payloads through unchanged', async () => {
+      // Native validates the payload before it crosses the bridge (non-empty
+      // name matching a registered session tool, JSON-object arguments); the
+      // facade's contract is to hand the validated call through untouched.
+      const mockResponse = {
+        type: 'toolCall' as const,
+        toolCall: {
+          id: 'call-42',
+          name: 'searchWeb',
+          arguments: {
+            query: 'expo foundation models',
+            maxResults: 5,
+            filters: { lang: 'en' },
+          },
+        },
+      };
+      mockModule.respondWithTools.mockResolvedValue(mockResponse);
+
+      const result = await FoundationModels.respondWithTools(
+        'session-123',
+        'Search for expo foundation models'
+      );
+
+      expect(mockModule.respondWithTools).toHaveBeenCalledWith(
+        'session-123',
+        'Search for expo foundation models',
+        null
+      );
+      expect(result.type).toBe('toolCall');
+      expect(result.toolCall?.id).toBe('call-42');
+      expect(result.toolCall?.name).toBe('searchWeb');
+      expect(result.toolCall?.arguments).toEqual({
+        query: 'expo foundation models',
+        maxResults: 5,
+        filters: { lang: 'en' },
+      });
+    });
   });
 
   describe('submitToolResult', () => {
@@ -439,6 +477,27 @@ describe('FoundationModels - Tool Calling', () => {
         );
       }
     );
+
+    it('should pass a final toolCall response through unchanged', async () => {
+      const finalToolCall = {
+        type: 'toolCall' as const,
+        toolCall: {
+          id: 'call-7',
+          name: 'getWeather',
+          arguments: { city: 'Seoul' },
+        },
+      };
+      mockModule.streamWithTools.mockResolvedValue(finalToolCall);
+
+      const result = await FoundationModels.streamWithTools(
+        'session-123',
+        "What's the weather in Seoul?",
+        { onToken: jest.fn(), onToolCall: jest.fn() }
+      );
+
+      expect(result.type).toBe('toolCall');
+      expect(result.toolCall).toEqual(finalToolCall.toolCall);
+    });
   });
 });
 

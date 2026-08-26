@@ -77,6 +77,23 @@ if (!features.features.privateCloudCompute) {
   account/model. On iOS 26 or earlier the request rejects with error code
   `featureUnavailable`.
 - Explicitly pass `{ type: 'system' }` (or omit `model`) for the standard on-device model.
+- **Supported PCC configuration:** Private Cloud Compute sessions accept a
+  narrower set of session options than on-device sessions. Unsupported options
+  fail fast with the `featureUnavailable` error code (surfaced as a
+  `notAvailable` error) instead of being silently ignored:
+
+  | Option | PCC behavior |
+  |--------|--------------|
+  | `instructions` | Supported |
+  | `tools` (prompt-based) | Supported |
+  | `guardrails` omitted or `'default'` | Supported |
+  | `useCase` omitted or `'general'` | Supported |
+  | `guardrails: 'permissiveContentTransformations'` | Rejected with `featureUnavailable` |
+  | `useCase: 'contentTagging'` | Rejected with `featureUnavailable` |
+  | `adapterId` | Rejected with `featureUnavailable` |
+
+  Drop the unsupported option or stay on the default on-device model when you
+  need it — on-device sessions keep accepting every option above.
 
 ### Model Variant Info
 

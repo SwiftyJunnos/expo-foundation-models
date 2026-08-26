@@ -636,7 +636,8 @@ extension FMErrorType {
         case .guardrailViolation: return .guardrailViolation
         case .refusal: return .refusal
         case .unsupportedLanguage: return .unsupportedLanguageOrLocale
-        case .notAvailable, .sessionNotFound, .featureUnavailable: return .unsupportedCapability
+        case .notAvailable, .sessionNotFound: return .unsupportedCapability
+        case .featureUnavailable: return .featureUnavailable
         case .generationFailed, .streamingFailed, .unknown: return .unknown
         }
     }
@@ -1901,15 +1902,15 @@ final class FoundationModelsManager: @unchecked Sendable {
     /// rejects every `contextOptions` payload, and a successful native
     /// conversion hands the flag to the framework, which honors it there.
     ///
-    /// Carries normalized code `featureUnavailable` explicitly: the TS facade
-    /// classifies it via its fast path, whereas message heuristics would
-    /// misfire ("cannot" → refusal, "context…" → contextWindowExceeded).
+    /// Maps to normalized code `featureUnavailable` by default (`FMErrorType`
+    /// default mapping), so the TS facade classifies it via its fast path,
+    /// whereas message heuristics would misfire ("cannot" → refusal,
+    /// "context…" → contextWindowExceeded).
     private func requireFallbackSchemaInPrompt(_ options: FMGenerationOptions) throws {
         guard options.contextOptions?.includeSchemaInPrompt == false else { return }
         throw FoundationModelsManagerError(
             type: .featureUnavailable,
-            message: "Cannot honor contextOptions.includeSchemaInPrompt = false: the JSON Schema could not be converted to a native generation schema, so the prompt-based fallback must include the schema to preserve structured output",
-            normalizedCode: .featureUnavailable
+            message: "Cannot honor contextOptions.includeSchemaInPrompt = false: the JSON Schema could not be converted to a native generation schema, so the prompt-based fallback must include the schema to preserve structured output"
         )
     }
 
@@ -2650,10 +2651,10 @@ final class FoundationModelsManager: @unchecked Sendable {
                             "The model did not return a parsable tool call while 'toolCallingMode' was 'required'"
                         )
                     }
-                    return ["type": "toolCall", "toolCall": makeToolCallPayload(toolCall)]
+                    return ["type": "toolCall", "toolCall": try validatedToolCallPayload(toolCall, sessionId: sessionId)]
                 case .optional:
                     if let toolCall = parseToolCallResponse(response.content) {
-                        return ["type": "toolCall", "toolCall": makeToolCallPayload(toolCall)]
+                        return ["type": "toolCall", "toolCall": try validatedToolCallPayload(toolCall, sessionId: sessionId)]
                     }
                     return ["type": "text", "content": response.content]
                 }
@@ -2787,13 +2788,12 @@ final class FoundationModelsManager: @unchecked Sendable {
                             "The model did not return a parsable tool call while 'toolCallingMode' was 'required'"
                         )
                     }
-                    let toolCallInfo = makeToolCallPayload(toolCall)
+                    let toolCallInfo = try validatedToolCallPayload(toolCall, sessionId: sessionId)
                     onToolCall(toolCallInfo)
                     return ["type": "toolCall", "toolCall": toolCallInfo]
                 case .optional:
                     if let toolCall = parseToolCallResponse(fullResponse) {
-                        let toolCallInfo = makeToolCallPayload(toolCall)
-                        onToolCall(toolCallInfo)
+                        let toolCallInfo = try validatedToolCallPayload(toolCall, sessionId: sessionId)
                         return ["type": "toolCall", "toolCall": toolCallInfo]
                     }
                     return ["type": "text", "content": fullResponse]
@@ -2987,12 +2987,42 @@ final class FoundationModelsManager: @unchecked Sendable {
         }
     }
 
-    /// Uniform wire payload for a parsed prompt-protocol tool call.
-    private func makeToolCallPayload(_ toolCall: [String: Any]) -> [String: Any] {
-        [
+    /// Validates a parsed prompt-protocol tool call against this session's
+    /// registered tools and builds its uniform wire payload. Shared by
+    /// respondWithTools/streamWithTools so both reject identical inputs.
+    ///
+    /// A parsed-but-invalid call never reaches JavaScript: an empty name, a
+    /// name not registered for the session, or non-object arguments throw a
+    /// normalized `generationFailed` error instead.
+    private func validatedToolCallPayload(
+        _ toolCall: [String: Any],
+        sessionId: String
+    ) throws -> [String: Any] {
+        guard let name = toolCall["name"] as? String, !name.isEmpty else {
+            throw FoundationModelsManagerError.generationFailed(
+                "The model returned a tool call without a valid 'name'"
+            )
+        }
+
+        let registeredNames: Set<String> = queue.sync {
+            Set((sessionTools[sessionId] ?? []).compactMap { $0["name"] as? String })
+        }
+        guard registeredNames.contains(name) else {
+            throw FoundationModelsManagerError.generationFailed(
+                "The model called unregistered tool '\(name)'"
+            )
+        }
+
+        guard let arguments = toolCall["arguments"] as? [String: Any] else {
+            throw FoundationModelsManagerError.generationFailed(
+                "The model returned a tool call for '\(name)' whose 'arguments' are not a JSON object"
+            )
+        }
+
+        return [
             "id": UUID().uuidString,
-            "name": toolCall["name"] ?? "",
-            "arguments": toolCall["arguments"] ?? [:]
+            "name": name,
+            "arguments": arguments
         ]
     }
 
@@ -3116,8 +3146,12 @@ final class FoundationModelsManager: @unchecked Sendable {
     ///
     /// `options["model"] = { type: "privateCloudCompute" }` selects
     /// `PrivateCloudComputeLanguageModel()` (iOS 27+, otherwise `featureUnavailable`).
-    /// `SystemLanguageModel(adapter:)` is obsoleted in iOS 27, so the adapter path is
-    /// confined to the <27 branch; on iOS 27 an `adapterId` can no longer be honored.
+    /// PCC sessions support only default/general configuration: `useCase:
+    /// "contentTagging"`, `guardrails: "permissiveContentTransformations"`, and any
+    /// `adapterId` throw `featureUnavailable` before the model/session is created;
+    /// instructions and prompt-based tools stay honored.
+    /// On the system language model, `SystemLanguageModel(adapter:)` is obsoleted
+    /// in iOS 27, so the adapter path is confined to the <27 branch.
     func createSessionWithConfigAsync(options: [String: Any]) async throws -> String {
         #if canImport(FoundationModels)
         if #available(iOS 26.0, macOS 26.0, *) {
@@ -3176,6 +3210,23 @@ final class FoundationModelsManager: @unchecked Sendable {
                 guard #available(iOS 27.0, macOS 27.0, *) else {
                     throw FoundationModelsManagerError.featureUnavailable(
                         "Private Cloud Compute requires iOS 27.0 or later"
+                    )
+                }
+                // The dedicated PCC model takes no configuration: reject anything
+                // it cannot honor instead of silently ignoring it.
+                if options["useCase"] as? String == "contentTagging" {
+                    throw FoundationModelsManagerError.featureUnavailable(
+                        "Private Cloud Compute does not support useCase 'contentTagging': the selected model supports only the general use case"
+                    )
+                }
+                if options["guardrails"] as? String == "permissiveContentTransformations" {
+                    throw FoundationModelsManagerError.featureUnavailable(
+                        "Private Cloud Compute does not support guardrails 'permissiveContentTransformations': the selected model supports only the default guardrails"
+                    )
+                }
+                if let adapterId = options["adapterId"] as? String {
+                    throw FoundationModelsManagerError.featureUnavailable(
+                        "Private Cloud Compute does not support adapterId '\(adapterId)': adapters apply only to the on-device system language model"
                     )
                 }
                 let pccModel = PrivateCloudComputeLanguageModel()
