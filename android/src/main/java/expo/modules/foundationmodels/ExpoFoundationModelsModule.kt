@@ -51,11 +51,17 @@ class ExpoFoundationModelsModule : Module() {
                 "reason" to "platformNotSupported",
                 "osVersion" to android.os.Build.VERSION.RELEASE,
                 "features" to mapOf(
-                    "tokenCounting" to false
+                    "privateCloudCompute" to false,
+                    "imageAttachments" to false,
+                    "contextOptions" to false,
+                    "toolCallingMode" to false,
+                    "tokenCounting" to false,
+                    "modelVariant" to false
                 )
             )
         }
 
+        // Token / Context / Variant Info Functions (iOS only)
 
         AsyncFunction("getTokenCount") { text: String, promise: Promise ->
             promise.reject(PlatformNotSupportedException())
@@ -65,6 +71,9 @@ class ExpoFoundationModelsModule : Module() {
             promise.reject(PlatformNotSupportedException())
         }
 
+        AsyncFunction("getModelVariant") { promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
 
         AsyncFunction("createSession") { instructions: String?, promise: Promise ->
             promise.reject(PlatformNotSupportedException())

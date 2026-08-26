@@ -101,6 +101,44 @@ function ChatScreen() {
 }
 ```
 
+## Context Options
+
+Control how much context and effort the model applies to a request.
+
+- **Availability:** iOS 27.0+. Passing `contextOptions` on iOS 26 or earlier rejects
+  with error code `featureUnavailable`. Check `features.features.contextOptions`
+  from `getFeatures()` first.
+
+```typescript
+const features = await FoundationModels.getFeatures();
+
+const options = features.features.contextOptions
+  ? {
+      contextOptions: {
+        reasoningLevel: 'deep',          // 'light' | 'moderate' | 'deep'
+        includeSchemaInPrompt: false,
+      },
+    }
+  : {};
+
+const response = await FoundationModels.respond(
+  sessionId,
+  'Analyze this architecture trade-off...',
+  options
+);
+```
+
+### Reasoning Levels
+
+| Level | Behavior | Use Case |
+|-------|----------|----------|
+| `light` | Fastest, minimal deliberation | Simple lookups, formatting |
+| `moderate` | Balanced (default behavior) | General tasks |
+| `deep` | Maximum deliberation | Complex reasoning, analysis |
+
+`includeSchemaInPrompt: false` keeps structured-output schemas out of the prompt text
+(relevant when combining `contextOptions` with schema-based requests).
+
 ## Resume Sessions
 
 Create a new session with existing conversation history.

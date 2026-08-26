@@ -12,13 +12,16 @@ import type {
   ExtendedSessionOptions,
   FeedbackOptions,
   FeedbackResult,
+  FoundationModelsFeatures,
   GenerationOptions,
   InputValidationResult,
   JSONSchema,
   LoadAdapterOptions,
   LocaleInfo,
   MLDictionary,
+  ModelVariantInfo,
   PrewarmOptions,
+  PromptWithAttachments,
   SessionDiagnostics,
   SessionOptions,
   ToolResponse,
@@ -47,6 +50,7 @@ declare class ExpoFoundationModelsModuleType extends NativeModule<ExpoFoundation
   getSessionDiagnostics(sessionId: string): Promise<SessionDiagnostics>;
 
   getLocaleInfo(): LocaleInfo;
+  getFeatures(): Promise<FoundationModelsFeatures>;
 
   // Foundation Models - Session Management
   createSession(instructions: string | null): Promise<string>;
@@ -57,38 +61,39 @@ declare class ExpoFoundationModelsModuleType extends NativeModule<ExpoFoundation
   getTranscript(sessionId: string): Promise<TranscriptEntry[]>;
   prewarm(sessionId: string, options: PrewarmOptions | null): Promise<void>;
 
-  // Foundation Models - Token Introspection (iOS 26.4+)
+  // Foundation Models - iOS 27 Introspection
   getTokenCount(text: string): Promise<number>;
   getContextSize(): Promise<number | null>;
+  getModelVariant(): Promise<ModelVariantInfo | null>;
 
   // Foundation Models - Text Generation
   respond(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     options: GenerationOptions | null
   ): Promise<string>;
   streamResponse(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     options: GenerationOptions | null
   ): Promise<string>;
 
   // Foundation Models - Structured Output
   respondWithSchema(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     schema: JSONSchema,
     options: GenerationOptions | null
   ): Promise<Record<string, unknown>>;
   respondWithChoices(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     choices: string[],
     options: GenerationOptions | null
   ): Promise<string>;
   streamWithSchema(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     schema: JSONSchema,
     options: GenerationOptions | null
   ): Promise<Record<string, unknown>>;
@@ -96,13 +101,13 @@ declare class ExpoFoundationModelsModuleType extends NativeModule<ExpoFoundation
   // Foundation Models - Tool Calling
   respondWithTools(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     options: GenerationOptions | null
   ): Promise<ToolResponse>;
   submitToolResult(sessionId: string, toolResult: ToolResult): Promise<ToolResponse>;
   streamWithTools(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     options: GenerationOptions | null
   ): Promise<ToolResponse>;
 

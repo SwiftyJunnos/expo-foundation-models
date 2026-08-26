@@ -105,7 +105,12 @@ describe('FoundationModels', () => {
         reason: 'platformNotSupported',
         osVersion: expect.any(String),
         features: {
+          privateCloudCompute: false,
+          imageAttachments: false,
+          contextOptions: false,
+          toolCallingMode: false,
           tokenCounting: false,
+          modelVariant: false,
         },
       });
       expect(mockModule.getAvailability).not.toHaveBeenCalled();

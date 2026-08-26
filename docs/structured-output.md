@@ -2,23 +2,24 @@
 
 Generate JSON conforming to schemas or constrain output to specific choices.
 
-> **iOS 26 Beta Workaround**
+> **iOS Version Behavior**
 >
-> The `DynamicGenerationSchema` API doesn't support runtime schema construction in current iOS 26 betas.
-> 
-> **Current Implementation:**
-> We use a **prompt-based workaround**:
-> 1. The JSON schema is serialized and included in the prompt
-> 2. The model is instructed to output valid JSON matching the schema
-> 3. The response is parsed and validated
+> - **iOS 27.0+** — Native path. The JSON Schema you pass is converted natively
+>   (`DynamicGenerationSchema` → `GenerationSchema`), so output is enforced by the
+>   framework instead of relying on prompt instructions. Same wire format
+>   (JSON Schema in, JSON object out) — no code changes needed.
+> - **iOS 26.x** — Prompt-based fallback. `DynamicGenerationSchema` does not support
+>   runtime schema construction there, so:
+>   1. The JSON schema is serialized and included in the prompt
+>   2. The model is instructed to output valid JSON matching the schema
+>   3. The response is parsed and validated
 >
-> **Limitations:**
-> - Results may vary - the model might not always produce valid JSON
-> - No native schema enforcement (the model can still produce invalid output)
-> - Slightly higher token usage due to schema in prompt
+> **On iOS 26 the following limitations remain:** results may vary (the model might not
+> always produce valid JSON), no native schema enforcement, slightly higher token usage,
+> and partial JSON parsing during streaming may fail.
 >
-> This workaround will be replaced with native `DynamicGenerationSchema` support when Apple stabilizes the API.
-> See [GitHub Issue #1](https://github.com/mcp-foundation/expo-foundation-models/issues/1) for updates.
+> The library selects the path automatically at runtime — check
+> `(await FoundationModels.getFeatures()).osVersion` if you need to know which one applies.
 
 ## JSON Schema Generation
 

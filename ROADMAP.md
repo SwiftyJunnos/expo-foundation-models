@@ -424,9 +424,48 @@ console.log(result.feedbackAttachment);
 
 ---
 
+## Phase 8: iOS 27 Support (Current)
+
+### 8.1 Runtime Feature Detection
+**Status:** ✅ Completed
+
+```typescript
+const features = await FoundationModels.getFeatures();
+// { osVersion, features: { privateCloudCompute, imageAttachments, contextOptions,
+//   toolCallingMode, tokenCounting, modelVariant } }
+```
+
+### 8.2 Private Cloud Compute Sessions
+**Status:** ✅ Completed (iOS 27.0+)
+
+`createSession({ model: { type: 'privateCloudCompute' } })`; rejects with `featureUnavailable` on iOS 26.
+
+### 8.3 Multimodal Image Attachments
+**Status:** ✅ Completed (iOS 27.0+)
+
+Object prompts `{ text, images?: Array<{ uri } | { base64 }> }` for `respond`/`streamResponse`.
+
+### 8.4 Context Options & Tool Calling Mode
+**Status:** ✅ Completed (iOS 27.0+)
+
+- `contextOptions: { reasoningLevel?, includeSchemaInPrompt? }`
+- `toolCallingMode: 'allowed' | 'required' | 'disallowed'`
+
+### 8.5 Token Counting & Model Info
+**Status:** ✅ Completed
+
+- `getTokenCount(text)`, `getContextSize()` — iOS 26.4+ (`null` below)
+- `getModelVariant()` — iOS 27.0+ (`null` below)
+
+### 8.6 Native Structured Output & Tool Output
+**Status:** ✅ Completed
+
+On iOS 27+: native `DynamicGenerationSchema` → `GenerationSchema` conversion and real
+`ToolOutput` returns; iOS 26 fallbacks retained unchanged.
+
 ## Implementation Status
 
-All phases completed for v1.0.0 release.
+All phases completed for v1.0.0; Phase 8 (iOS 27 support) completed for the next release.
 
 | Phase | Feature | Status |
 |-------|---------|--------|
@@ -445,20 +484,28 @@ All phases completed for v1.0.0 release.
 | 6.1 | Adapter Loading | ✅ Done |
 | 6.2 | Local Adapters | ✅ Done |
 | 7.1 | Feedback Logging | ✅ Done |
+| 8.1 | Feature Detection | ✅ Done |
+| 8.2 | Private Cloud Compute | ✅ Done |
+| 8.3 | Image Attachments | ✅ Done |
+| 8.4 | Context Options & Tool Calling Mode | ✅ Done |
+| 8.5 | Token Counting & Model Info | ✅ Done |
+| 8.6 | Native Structured/Tool Output | ✅ Done |
 
 ---
 
 ## Technical Notes
 
 ### iOS Version Requirements
-- Foundation Models: iOS 26.0+ (beta)
+- Foundation Models base API: iOS 26.0+
+- Token counting: iOS 26.4+
+- Private Cloud Compute, image attachments, context options, tool calling mode, model variant: iOS 27.0+
 - CoreML: iOS 16.0+
 
 ### Known Limitations
 - Foundation Models is iOS-only (no Android equivalent)
 - Requires Apple Intelligence to be enabled in device settings
 - Model availability depends on device capability (A17+ chip)
-- Some features may change as iOS 26 is still in beta
+- Some features may change across iOS releases; iOS 26 fallbacks are retained for every iOS 27 capability
 
 ### Testing Considerations
 - Need iOS 26 beta device or simulator for testing

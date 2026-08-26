@@ -59,6 +59,18 @@ export type GenerationOptions = {
    */
   maximumResponseTokens?: number;
 
+  /**
+   * Tool calling mode for the request (iOS 27+).
+   * - `allowed`: The model may call tools (default)
+   * - `required`: The model must call a tool
+   * - `disallowed`: The model must not call tools
+   */
+  toolCallingMode?: ToolCallingMode;
+
+  /**
+   * Context configuration for the request (iOS 27+).
+   */
+  contextOptions?: ContextOptions;
 };
 
 /**
@@ -101,7 +113,7 @@ export type Availability = {
   message?: string;
   /** OS version string (e.g., "27.0") — iOS 26.0+ */
   osVersion?: string;
-  /** Feature flags reported by native (token counting: iOS 26.4+) */
+  /** iOS 27+ feature flags (all false on older OS versions) */
   features?: FoundationModelsFeatures;
 };
 
@@ -415,6 +427,8 @@ export type ExtendedSessionOptions = {
   tools?: Tool[];
   /** Adapter ID to use for the session (from loadAdapter or loadAdapterFromFile) */
   adapterId?: string;
+  /** Model specifier for the session — `{ type: 'privateCloudCompute' }` requires iOS 27+ */
+  model?: PccModelSpecifier;
 };
 
 // MARK: - Adapter Types
@@ -802,17 +816,77 @@ export type LocaleInfo = {
   calendar: string;
 };
 
-// MARK: - iOS 26.4 Feature Types
+// MARK: - iOS 27 Feature Types
 
 /**
- * Feature flags reported by `getAvailability()`.
+ * Feature flags reported by `getFeatures()` / `getAvailability()`.
  *
- * All flags are `false` on OS versions below the feature's minimum:
+ * All flags are `false` on iOS versions below the feature's minimum:
+ * - `privateCloudCompute`, `imageAttachments`, `contextOptions`,
+ *   `toolCallingMode`, `modelVariant`: iOS 27.0+
  * - `tokenCounting`: iOS 26.4+
  */
 export type FoundationModelsFeatures = {
+  /** Private Cloud Compute model selection (iOS 27+) */
+  privateCloudCompute: boolean;
+  /** Image attachments in prompts (iOS 27+) */
+  imageAttachments: boolean;
+  /** Context options (reasoning level, schema-in-prompt) (iOS 27+) */
+  contextOptions: boolean;
+  /** Tool calling mode configuration (iOS 27+) */
+  toolCallingMode: boolean;
   /** Token counting via getTokenCount (iOS 26.4+) */
   tokenCounting: boolean;
+  /** Model variant introspection via getModelVariant (iOS 27+) */
+  modelVariant: boolean;
+};
+
+/**
+ * Model specifier for session creation.
+ *
+ * - `{ type: 'system' }`: The default on-device system language model.
+ * - `{ type: 'privateCloudCompute' }`: Private Cloud Compute model (iOS 27+).
+ *   Requests fail with a `featureUnavailable` error on iOS 26 or earlier.
+ */
+export type PccModelSpecifier = { type: 'system' } | { type: 'privateCloudCompute' };
+
+/**
+ * Tool calling mode for a generation request (iOS 27+).
+ */
+export type ToolCallingMode = 'allowed' | 'required' | 'disallowed';
+
+/**
+ * Context configuration for a generation request (iOS 27+ `ContextOptions`).
+ */
+export type ContextOptions = {
+  /** Reasoning effort for the request */
+  reasoningLevel?: 'light' | 'moderate' | 'deep';
+  /** Whether to include the JSON schema in the prompt for structured output */
+  includeSchemaInPrompt?: boolean;
+};
+
+/**
+ * An image attachment for a prompt. Exactly one of `uri` or `base64` must be set.
+ */
+export type PromptImage = { uri: string } | { base64: string };
+
+/**
+ * A prompt with optional image attachments (iOS 27+).
+ * The plain string prompt form is still accepted everywhere.
+ */
+export type PromptWithAttachments = {
+  /** The prompt text */
+  text: string;
+  /** Optional image attachments */
+  images?: PromptImage[];
+};
+
+/**
+ * Information about the current model variant (iOS 27+).
+ */
+export type ModelVariantInfo = {
+  /** Human-readable display name of the model variant */
+  displayName?: string;
 };
 
 /**

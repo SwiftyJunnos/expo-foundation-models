@@ -18,7 +18,7 @@ import {
 } from 'expo-foundation-models';
 
 // Demo tabs
-type Tab = 'basic' | 'structured' | 'tools' | 'session' | 'feedback';
+type Tab = 'basic' | 'structured' | 'tools' | 'session' | 'feedback' | 'ios27';
 
 // ============================================================================
 // Tool Implementations - Real API calls for tool demo
@@ -821,6 +821,274 @@ function FeedbackDemo() {
 }
 
 // ============================================================================
+// iOS 27 Demo - Feature-gated new capabilities
+// ============================================================================
+
+// Local structural type so the demo stays compilable against older library versions.
+type IOS27FeatureFlags = {
+  privateCloudCompute: boolean;
+  imageAttachments: boolean;
+  contextOptions: boolean;
+  toolCallingMode: boolean;
+  tokenCounting: boolean;
+  modelVariant: boolean;
+};
+
+// Tiny 1x1 red PNG used as an inline base64 image attachment for the multimodal demo.
+const DEMO_IMAGE_BASE64 =
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+
+function IOS27Demo() {
+  const [loading, setLoading] = useState(false);
+  const [osVersion, setOsVersion] = useState<string | null>(null);
+  const [features, setFeatures] = useState<IOS27FeatureFlags | null>(null);
+  const [modelInfo, setModelInfo] = useState<string | null>(null);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  // Defensive access keeps this tab crash-free on devices running a library
+  // build (or OS) without the iOS 27 APIs.
+  const fm = FoundationModels as unknown as Record<string, any>;
+  const hasGetFeatures = typeof fm.getFeatures === 'function';
+
+  const loadFeatures = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    setModelInfo(null);
+
+    try {
+      if (!hasGetFeatures) {
+        setError('getFeatures() is not available in this library build. Update expo-foundation-models.');
+        return;
+      }
+
+      const detected = await fm.getFeatures();
+      const flags: IOS27FeatureFlags = {
+        privateCloudCompute: !!detected?.features?.privateCloudCompute,
+        imageAttachments: !!detected?.features?.imageAttachments,
+        contextOptions: !!detected?.features?.contextOptions,
+        toolCallingMode: !!detected?.features?.toolCallingMode,
+        tokenCounting: !!detected?.features?.tokenCounting,
+        modelVariant: !!detected?.features?.modelVariant,
+      };
+      setOsVersion(detected?.osVersion ?? 'unknown');
+      setFeatures(flags);
+
+      // Token counting (iOS 26.4+) and variant info (iOS 27+) when supported
+      const infoLines: string[] = [];
+      if (flags.tokenCounting && typeof fm.getTokenCount === 'function') {
+        const tokens: number = await fm.getTokenCount('Hello, how are you today?');
+        infoLines.push(`Token count ("Hello, how are you today?"): ${tokens}`);
+        if (typeof fm.getContextSize === 'function') {
+          const contextSize: number | null = await fm.getContextSize();
+          infoLines.push(`Context size: ${contextSize != null ? contextSize : 'N/A (< iOS 26.4)'}`);
+        }
+      }
+      if (flags.modelVariant && typeof fm.getModelVariant === 'function') {
+        const variant = await fm.getModelVariant();
+        infoLines.push(`Model variant: ${variant?.displayName ?? 'default'}`);
+      }
+      if (infoLines.length === 0) {
+        infoLines.push('Token counting / model variant not supported on this OS.');
+      }
+      setModelInfo(infoLines.join('\n'));
+    } catch (err) {
+      setError(err instanceof FoundationModelsError ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [hasGetFeatures]);
+
+  const runPccSession = useCallback(async () => {
+    if (!features?.privateCloudCompute) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    let sessionId: string | null = null;
+
+    try {
+      sessionId = await FoundationModels.createSession({
+        instructions: 'You are a helpful assistant.',
+        model: { type: 'privateCloudCompute' },
+      });
+      const response = await FoundationModels.respond(
+        sessionId,
+        'In one sentence, explain what Private Cloud Compute is.'
+      );
+      setResult(`[PCC session]\n${response}`);
+    } catch (err) {
+      setError(err instanceof FoundationModelsError ? err.message : String(err));
+    } finally {
+      if (sessionId) {
+        try {
+          await FoundationModels.closeSession(sessionId);
+        } catch {}
+      }
+      setLoading(false);
+    }
+  }, [features]);
+
+  const runImagePrompt = useCallback(async () => {
+    if (!features?.imageAttachments) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    let sessionId: string | null = null;
+
+    try {
+      sessionId = await FoundationModels.createSession({
+        instructions: 'You describe images concisely.',
+      });
+      const fmAny = FoundationModels as unknown as Record<string, any>;
+      const response: string = await fmAny.respond(sessionId, {
+        text: 'What color is this image?',
+        images: [{ base64: DEMO_IMAGE_BASE64 }],
+      });
+      setResult(`[Image attachment prompt]\n${response}`);
+    } catch (err) {
+      setError(err instanceof FoundationModelsError ? err.message : String(err));
+    } finally {
+      if (sessionId) {
+        try {
+          await FoundationModels.closeSession(sessionId);
+        } catch {}
+      }
+      setLoading(false);
+    }
+  }, [features]);
+
+  const runDeepReasoning = useCallback(async () => {
+    if (!features?.contextOptions) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+    let sessionId: string | null = null;
+
+    try {
+      sessionId = await FoundationModels.createSession({
+        instructions: 'You are a thoughtful analyst.',
+      });
+      const response = await FoundationModels.respond(
+        sessionId,
+        'Give one argument for and against on-device AI.',
+        {
+          contextOptions: {
+            reasoningLevel: 'deep',
+            includeSchemaInPrompt: false,
+          },
+        }
+      );
+      setResult(`[contextOptions: reasoningLevel=deep]\n${response}`);
+    } catch (err) {
+      setError(err instanceof FoundationModelsError ? err.message : String(err));
+    } finally {
+      if (sessionId) {
+        try {
+          await FoundationModels.closeSession(sessionId);
+        } catch {}
+      }
+      setLoading(false);
+    }
+  }, [features]);
+
+  const runRequiredToolCall = useCallback(async () => {
+    if (!features?.toolCallingMode) return;
+    setLoading(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const sessionId = await FoundationModels.createSessionWithTools({
+        instructions: 'You answer questions about time using tools.',
+        tools: [
+          {
+            name: 'getCurrentTime',
+            description: 'Get the current wall-clock time',
+            parameters: { type: 'object', properties: {}, required: [] },
+          },
+        ],
+      });
+      const fmAny = FoundationModels as unknown as Record<string, any>;
+      const response = await fmAny.respondWithTools(
+        sessionId,
+        'What time is it right now?',
+        { toolCallingMode: 'required' }
+      );
+
+      if (response.type === 'toolCall' && response.toolCall) {
+        const now = new Date().toLocaleTimeString();
+        const finalResponse = await FoundationModels.submitToolResult(sessionId, {
+          callId: response.toolCall.id,
+          result: { time: now },
+        });
+        setResult(
+          `[toolCallingMode=required]\nTool call: ${response.toolCall.name}\n` +
+            `Assistant: ${finalResponse.content ?? ''}`
+        );
+      } else {
+        setResult(`[toolCallingMode=required]\n${response.content ?? JSON.stringify(response)}`);
+      }
+      await FoundationModels.closeSession(sessionId);
+    } catch (err) {
+      setError(err instanceof FoundationModelsError ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [features]);
+
+  return (
+    <>
+      <Text style={styles.sectionTitle}>iOS 27 Capabilities</Text>
+      <Text style={styles.description}>
+        New Foundation Models capabilities, gated behind runtime feature detection.
+      </Text>
+
+      <View style={styles.buttonRow}>
+        <Button title="Detect Features" onPress={loadFeatures} disabled={loading} />
+      </View>
+
+      {osVersion && (
+        <StatusBadge label={`OS ${osVersion}`} active />
+      )}
+
+      {features && (
+        <View style={styles.featureGrid}>
+          {(
+            [
+              ['Private Cloud Compute', features.privateCloudCompute],
+              ['Image Attachments', features.imageAttachments],
+              ['Context Options', features.contextOptions],
+              ['Tool Calling Mode', features.toolCallingMode],
+              ['Token Counting (26.4+)', features.tokenCounting],
+              ['Model Variant', features.modelVariant],
+            ] as [string, boolean][]
+          ).map(([label, supported]) => (
+            <StatusBadge key={label} label={label} active={supported} />
+          ))}
+        </View>
+      )}
+
+      {modelInfo && <ResultBox title="Model Info" content={modelInfo} />}
+
+      <View style={styles.buttonRow}>
+        <Button title="PCC Session" onPress={runPccSession} disabled={loading || !features?.privateCloudCompute} />
+        <Button title="Image Prompt" onPress={runImagePrompt} disabled={loading || !features?.imageAttachments} color="#5856D6" />
+      </View>
+
+      <View style={styles.buttonRow}>
+        <Button title="Reasoning: Deep" onPress={runDeepReasoning} disabled={loading || !features?.contextOptions} color="#34C759" />
+        <Button title="Force Tool Call" onPress={runRequiredToolCall} disabled={loading || !features?.toolCallingMode} color="#FF9500" />
+      </View>
+
+      {loading && <ActivityIndicator style={styles.loader} size="large" color="#007AFF" />}
+      {error && <ErrorBox message={error} />}
+      {result && <ResultBox title="Result" content={result} />}
+    </>
+  );
+}
+
+// ============================================================================
 // Shared Components
 // ============================================================================
 function Button({ title, onPress, disabled, color = '#007AFF' }: {
@@ -883,6 +1151,7 @@ export default function App() {
     { key: 'tools', label: 'Tools' },
     { key: 'session', label: 'Session' },
     { key: 'feedback', label: 'Feedback' },
+    { key: 'ios27', label: 'iOS 27' },
   ];
 
   const renderContent = () => {
@@ -911,6 +1180,8 @@ export default function App() {
         return <SessionDemo />;
       case 'feedback':
         return <FeedbackDemo />;
+      case 'ios27':
+        return <IOS27Demo />;
     }
   };
 
@@ -1038,6 +1309,12 @@ const styles = StyleSheet.create({
   statusRow: {
     flexDirection: 'row',
     gap: 16,
+    marginBottom: 12,
+  },
+  featureGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
     marginBottom: 12,
   },
   statusBadge: {

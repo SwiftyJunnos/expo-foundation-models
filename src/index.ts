@@ -3,6 +3,7 @@ import ExpoFoundationModelsModule, { isNativeModuleAvailable } from './ExpoFound
 import type {
   MLValue,
   MLDictionary,
+  ContextOptions,
   FoundationModelsErrorCode,
   FoundationModelsErrorObject,
   FoundationModelsFeatures,
@@ -30,6 +31,11 @@ import type {
   CreateSessionWithTranscriptOptions,
   GuardrailsMode,
   ModelUseCase,
+  ModelVariantInfo,
+  PccModelSpecifier,
+  PromptImage,
+  PromptWithAttachments,
+  ToolCallingMode,
   ExtendedSessionOptions,
   AdapterDownloadStatus,
   AdapterInfo,
@@ -59,6 +65,7 @@ import type {
 export type {
   MLValue,
   MLDictionary,
+  ContextOptions,
   FoundationModelsErrorCode,
   FoundationModelsErrorObject,
   FoundationModelsFeatures,
@@ -86,6 +93,11 @@ export type {
   CreateSessionWithTranscriptOptions,
   GuardrailsMode,
   ModelUseCase,
+  ModelVariantInfo,
+  PccModelSpecifier,
+  PromptImage,
+  PromptWithAttachments,
+  ToolCallingMode,
   ExtendedSessionOptions,
   AdapterDownloadStatus,
   AdapterInfo,
@@ -156,6 +168,67 @@ function assertSessionId(sessionId: unknown): asserts sessionId is string {
     throw new FoundationModelsError('Session ID must be a non-empty string', {
       type: 'sessionNotFound',
     });
+  }
+}
+
+/**
+ * Assert that a prompt is a valid string or a prompt object with attachments.
+ *
+ * String form: non-empty string.
+ * Object form ({@link PromptWithAttachments}): `text` must be a non-empty
+ * string and each entry in `images` must carry exactly one of `uri` or
+ * `base64`.
+ *
+ * @throws {FoundationModelsError} If validation fails
+ */
+function assertPromptInput(
+  prompt: unknown,
+  errorType: GenerationErrorType = 'generationFailed'
+): asserts prompt is string | PromptWithAttachments {
+  if (typeof prompt === 'string') {
+    if (!prompt) {
+      throw new FoundationModelsError('Prompt must be a non-empty string', {
+        type: errorType,
+      });
+    }
+    return;
+  }
+  if (!prompt || typeof prompt !== 'object') {
+    throw new FoundationModelsError(
+      'Prompt must be a non-empty string or an object with text and optional images',
+      { type: errorType }
+    );
+  }
+  const p = prompt as Record<string, unknown>;
+  if (typeof p.text !== 'string' || !p.text) {
+    throw new FoundationModelsError('Prompt text must be a non-empty string', {
+      type: errorType,
+    });
+  }
+  if (p.images === undefined) {
+    return;
+  }
+  if (!Array.isArray(p.images)) {
+    throw new FoundationModelsError('Prompt images must be an array', {
+      type: errorType,
+    });
+  }
+  for (const image of p.images) {
+    if (!image || typeof image !== 'object') {
+      throw new FoundationModelsError(
+        'Each prompt image must be an object with exactly one of uri or base64',
+        { type: errorType }
+      );
+    }
+    const img = image as Record<string, unknown>;
+    const hasUri = typeof img.uri === 'string' && img.uri.length > 0;
+    const hasBase64 = typeof img.base64 === 'string' && img.base64.length > 0;
+    if (hasUri === hasBase64) {
+      throw new FoundationModelsError(
+        'Each prompt image must have exactly one of uri or base64',
+        { type: errorType }
+      );
+    }
   }
 }
 
@@ -725,7 +798,12 @@ export const CoreML = {
 
 /** Feature flags reported when Foundation Models is not usable (non-iOS, missing native module, or failure). */
 const ALL_FEATURES_UNAVAILABLE: FoundationModelsFeatures = {
+  privateCloudCompute: false,
+  imageAttachments: false,
+  contextOptions: false,
+  toolCallingMode: false,
   tokenCounting: false,
+  modelVariant: false,
 };
 
 /** All valid values of {@link FoundationModelsErrorCode}, for runtime validation of native payloads. */
@@ -844,7 +922,7 @@ export const FoundationModels = {
    *
    * This provides more context than `isAvailable()`, including the specific
    * reason why Foundation Models may be unavailable, plus OS version and
-   * feature flags when reported by the native layer.
+   * iOS 27+ feature flags when reported by the native layer.
    *
    * @returns Availability object with status and optional reason
    *
@@ -902,6 +980,38 @@ export const FoundationModels = {
   },
 
   /**
+   * Get the iOS 27+ Foundation Models feature flags supported on this device.
+   *
+   * All flags are `false` when Foundation Models is not usable (non-iOS,
+   * missing native module) or on OS versions below each feature's minimum
+   * (`tokenCounting`: iOS 26.4+, all others: iOS 27+).
+   *
+   * @returns Feature flags
+   *
+   * @example
+   * ```typescript
+   * const features = await FoundationModels.getFeatures();
+   * if (features.imageAttachments) {
+   *   await FoundationModels.respond(sessionId, {
+   *     text: 'What is in this image?',
+   *     images: [{ uri: 'file:///tmp/photo.jpg' }]
+   *   });
+   * }
+   * ```
+   */
+  async getFeatures(): Promise<FoundationModelsFeatures> {
+    if (Platform.OS !== 'ios' || !isNativeModuleAvailable()) {
+      return ALL_FEATURES_UNAVAILABLE;
+    }
+    try {
+      return await ExpoFoundationModelsModule.getFeatures();
+    } catch (error) {
+      console.warn('[FoundationModels] getFeatures() failed:', error);
+      return ALL_FEATURES_UNAVAILABLE;
+    }
+  },
+
+  /**
    * Count the tokens the system model would use for the given text.
    *
    * Requires iOS 26.4+; fails with a `featureUnavailable` normalized error on
@@ -936,6 +1046,23 @@ export const FoundationModels = {
       return await ExpoFoundationModelsModule.getContextSize();
     } catch (error) {
       throw parseNativeError(error, 'Failed to get context size', 'CONTEXT_SIZE_FAILED');
+    }
+  },
+
+  /**
+   * Get information about the current model variant.
+   *
+   * Requires iOS 27+; resolves to `null` on older versions.
+   *
+   * @returns Promise resolving to variant info, or null when unavailable
+   */
+  async getModelVariant(): Promise<ModelVariantInfo | null> {
+    assertIOSForFoundationModels();
+
+    try {
+      return await ExpoFoundationModelsModule.getModelVariant();
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to get model variant', 'MODEL_VARIANT_FAILED');
     }
   },
 
@@ -1117,9 +1244,10 @@ export const FoundationModels = {
       // Handle new options object API
       const options = optionsOrInstructions;
 
-      // If options contain advanced config (tools, guardrails, useCase, or
+      // If options contain advanced config (model, tools, guardrails, useCase, or
       // adapterId), use createSessionWithConfig
       if (
+        options.model ||
         (options.tools && options.tools.length > 0) ||
         options.guardrails ||
         options.useCase ||
@@ -1131,6 +1259,7 @@ export const FoundationModels = {
           useCase: options.useCase,
           tools: options.tools,
           adapterId: options.adapterId,
+          model: options.model,
         });
       }
 
@@ -1168,11 +1297,11 @@ export const FoundationModels = {
    */
   async respond(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     options?: GenerationOptions
   ): Promise<string> {
     assertSessionId(sessionId);
-    assertNonEmptyString(prompt, 'Prompt');
+    assertPromptInput(prompt);
 
     try {
       return await ExpoFoundationModelsModule.respond(sessionId, prompt, options ?? null);
@@ -1193,12 +1322,12 @@ export const FoundationModels = {
    */
   async streamResponse(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     onToken: (token: string) => void,
     options?: GenerationOptions
   ): Promise<string> {
     assertSessionId(sessionId);
-    assertNonEmptyString(prompt, 'Prompt', 'streamingFailed');
+    assertPromptInput(prompt, 'streamingFailed');
 
     const subscription = ExpoFoundationModelsModule.addListener('onToken', (event: TokenEvent) => {
       if (event.sessionId === sessionId) {
@@ -1251,13 +1380,13 @@ export const FoundationModels = {
    */
   async respondWithSchema<T = Record<string, unknown>>(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     schema: JSONSchema,
     options?: GenerationOptions
   ): Promise<T> {
     assertIOSForFoundationModels();
     assertSessionId(sessionId);
-    assertNonEmptyString(prompt, 'Prompt');
+    assertPromptInput(prompt);
     assertSchema(schema);
 
     try {
@@ -1295,13 +1424,13 @@ export const FoundationModels = {
    */
   async respondWithChoices(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     choices: string[],
     options?: GenerationOptions
   ): Promise<string> {
     assertIOSForFoundationModels();
     assertSessionId(sessionId);
-    assertNonEmptyString(prompt, 'Prompt');
+    assertPromptInput(prompt);
     assertChoices(choices);
 
     try {
@@ -1330,14 +1459,14 @@ export const FoundationModels = {
    */
   async streamWithSchema<T = Record<string, unknown>>(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     schema: JSONSchema,
     onPartial: (partial: Partial<T>) => void,
     options?: GenerationOptions
   ): Promise<T> {
     assertIOSForFoundationModels();
     assertSessionId(sessionId);
-    assertNonEmptyString(prompt, 'Prompt', 'streamingFailed');
+    assertPromptInput(prompt, 'streamingFailed');
     assertSchema(schema, 'streamingFailed');
 
     const subscription = ExpoFoundationModelsModule.addListener(
@@ -1433,12 +1562,12 @@ export const FoundationModels = {
    */
   async respondWithTools(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     options?: GenerationOptions
   ): Promise<ToolResponse> {
     assertIOSForFoundationModels();
     assertSessionId(sessionId);
-    assertNonEmptyString(prompt, 'Prompt');
+    assertPromptInput(prompt);
 
     try {
       return await ExpoFoundationModelsModule.respondWithTools(sessionId, prompt, options ?? null);
@@ -1487,13 +1616,13 @@ export const FoundationModels = {
    */
   async streamWithTools(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     callbacks: StreamWithToolsCallbacks,
     options?: GenerationOptions
   ): Promise<ToolResponse> {
     assertIOSForFoundationModels();
     assertSessionId(sessionId);
-    assertNonEmptyString(prompt, 'Prompt', 'streamingFailed');
+    assertPromptInput(prompt, 'streamingFailed');
 
     const tokenSubscription = ExpoFoundationModelsModule.addListener(
       'onToken',
@@ -1846,8 +1975,8 @@ function parseNativeError(
         context: nativeInfo?.context,
         diagnostics: nativeInfo?.diagnostics,
         suggestions: nativeInfo?.suggestions ?? [
-          'This feature requires a newer iOS version',
-          'Check availability before using this API',
+          'This feature requires iOS 27.0 or later',
+          'Check FoundationModels.getFeatures() before using iOS 27-only APIs',
         ],
       });
     }

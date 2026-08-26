@@ -21,7 +21,12 @@ npx pod-install
 
 ### Foundation Models (Apple Intelligence)
 
-- **iOS 26.0+** (currently in beta)
+- **iOS 26.0+** for the base API (text generation, streaming, structured output, tool calling)
+- **iOS 26.4+** for token counting (`getTokenCount`, `getContextSize`)
+- **iOS 27.0+** for Private Cloud Compute sessions, multimodal image attachments,
+  context options (`contextOptions`), and tool calling mode (`toolCallingMode`)
+  (`getModelVariant()` exists but always returns `null` — the underlying symbol was
+  not shipped in the final iOS 27 SDK)
 - **Apple Silicon device** (A17 Pro or later)
 - **Apple Intelligence enabled** in Settings > Apple Intelligence & Siri
 
@@ -33,7 +38,7 @@ npx pod-install
 ### Development
 
 - **Expo SDK 54+**
-- **Xcode 16+** with iOS 26 SDK
+- **Xcode with the iOS 26 SDK or newer** (iOS 27 SDK required to build the iOS 27 paths)
 
 ## Checking Availability
 
@@ -56,6 +61,34 @@ console.log(availability);
 //   reason: 'appleIntelligenceNotEnabled'
 // }
 ```
+
+### Feature Detection
+
+Beyond availability, use `getFeatures()` to check which optional capabilities are
+supported on the current device before using them:
+
+```typescript
+const features = await FoundationModels.getFeatures();
+// {
+//   osVersion: '27.0',
+//   features: {
+//     privateCloudCompute: true,   // iOS 27+
+//     imageAttachments: true,      // iOS 27+
+//     contextOptions: true,        // iOS 27+
+//     toolCallingMode: true,       // iOS 27+
+//     tokenCounting: true,         // iOS 26.4+
+//     modelVariant: false,        // reserved — symbol absent from iOS 27 SDK
+//   }
+// }
+
+if (!features.features.privateCloudCompute) {
+  // Fall back to on-device model sessions — always supported on iOS 26+
+}
+```
+
+All flags are `false` below the minimum OS for that capability. Calling a capability
+gated method without checking still fails safely: it rejects with error code
+`featureUnavailable` rather than crashing.
 
 ### Availability Reasons
 

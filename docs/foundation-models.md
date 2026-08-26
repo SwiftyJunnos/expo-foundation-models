@@ -29,12 +29,13 @@ const sessionId = await FoundationModels.createSession({
 
 ### Session Options
 
-| Option | Type | Description |
-|--------|------|-------------|
-| `instructions` | `string` | System instructions for the model |
-| `guardrails` | `'default' \| 'permissiveContentTransformations'` | Safety mode |
-| `useCase` | `'general' \| 'contentTagging'` | Model optimization |
-| `adapterId` | `string` | Custom adapter ID |
+| Option | Type | Description | Availability |
+|--------|------|-------------|--------------|
+| `instructions` | `string` | System instructions for the model | iOS 26.0+ |
+| `guardrails` | `'default' \| 'permissiveContentTransformations'` | Safety mode | iOS 26.0+ |
+| `useCase` | `'general' \| 'contentTagging'` | Model optimization | iOS 26.0+ |
+| `adapterId` | `string` | Custom adapter ID | iOS 26.0+ |
+| `model` | `{ type: 'system' } \| { type: 'privateCloudCompute' }` | Model backing the session | `{ type: 'privateCloudCompute' }`: iOS 27.0+ |
 
 ### Guardrails Modes
 
@@ -45,6 +46,63 @@ const sessionId = await FoundationModels.createSession({
 
 - **`general`**: General-purpose text generation (default)
 - **`contentTagging`**: Optimized for categorization and tagging
+
+## Model Selection
+
+### Private Cloud Compute (iOS 27.0+)
+
+By default every session runs fully on device (`SystemLanguageModel`). On iOS 27+ you can
+back a session with Apple's **Private Cloud Compute** model for larger workloads while
+preserving the same privacy guarantees:
+
+```typescript
+const features = await FoundationModels.getFeatures();
+
+if (!features.features.privateCloudCompute) {
+  // Stay on the on-device model (iOS 26 compatible default)
+  const sessionId = await FoundationModels.createSession({
+    instructions: 'You are a helpful assistant.',
+  });
+} else {
+  const sessionId = await FoundationModels.createSession({
+    instructions: 'You are a helpful assistant.',
+    model: { type: 'privateCloudCompute' }, // PrivateCloudComputeLanguageModel
+  });
+}
+```
+
+- **Availability:** iOS 27.0+. On iOS 26 or earlier the request rejects with error code `featureUnavailable`.
+- Explicitly pass `{ type: 'system' }` (or omit `model`) for the standard on-device model.
+
+### Model Variant Info
+
+```typescript
+// Returns { displayName?: string } | null — currently null on ALL OS versions
+const variant = await FoundationModels.getModelVariant();
+```
+
+> **Note:** Apple's documentation lists a `SystemLanguageModel.variant` API for iOS 27,
+> but the shipped iOS 27.0 SDK does not include that symbol. `getModelVariant()` is kept
+> behind the iOS 27 availability guard and returns `null` until Apple provides a
+> replacement; the `modelVariant` feature flag therefore reports `false`.
+
+## Token Counting & Context Size
+
+Query token usage before sending prompts to stay within the context window.
+
+- **Availability:** iOS 26.4+. `getContextSize()` returns `null` below iOS 26.4.
+
+```typescript
+const features = await FoundationModels.getFeatures();
+if (features.features.tokenCounting) {
+  const tokens = await FoundationModels.getTokenCount('Summarize this article...');
+  const contextSize = await FoundationModels.getContextSize(); // number | null
+
+  if (contextSize != null && tokens >= contextSize * 0.8) {
+    console.warn('Prompt is close to the context limit');
+  }
+}
+```
 
 ## Text Generation
 

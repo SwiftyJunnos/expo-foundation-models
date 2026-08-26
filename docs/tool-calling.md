@@ -2,20 +2,21 @@
 
 Let the model call functions you define to extend its capabilities.
 
-> **iOS 26 Beta Workaround**
+> **iOS Version Behavior**
 >
-> The native Tool API requires compile-time `@Generable` argument types, which can't be created dynamically from JavaScript. We use a **prompt-based workaround**:
+> - **iOS 27.0+** — Native tool calling. `DynamicTool.call` returns real `ToolOutput`
+>   values to the framework; tool calls are validated natively.
+> - **iOS 26.x** — Prompt-based fallback. The native Tool API requires compile-time
+>   `@Generable` argument types there, so:
+>   1. Tool definitions are included in the prompt to the model
+>   2. The model responds with a JSON tool call if needed
+>   3. Tool results are submitted by continuing the conversation (output placeholder `'{}'`)
 >
-> 1. Tool definitions are included in the prompt to the model
-> 2. The model responds with a JSON tool call if needed
-> 3. Tool results are submitted by continuing the conversation
+> **On iOS 26 the following limitations remain:** the model may not always format tool
+> calls correctly, no native tool call validation, and slightly higher token usage due
+> to tool definitions in the prompt.
 >
-> **Limitations:**
-> - Model may not always format tool calls correctly
-> - No native tool call validation
-> - Slightly higher token usage due to tool definitions in prompt
->
-> See [GitHub Issue #1](https://github.com/mcp-foundation/expo-foundation-models/issues/1) for updates.
+> The library selects the path automatically at runtime.
 
 ## Overview
 
@@ -261,6 +262,36 @@ if (response.type === 'toolCall') {
   // Handle tool call
 }
 ```
+
+## Tool Calling Mode
+
+Control whether the model may, must, or must not use tools for a request.
+
+- **Availability:** iOS 27.0+. Passing `toolCallingMode` on iOS 26 or earlier rejects
+  with error code `featureUnavailable`. Check `features.features.toolCallingMode`
+  from `getFeatures()` first.
+
+```typescript
+const features = await FoundationModels.getFeatures();
+
+if (!features.features.toolCallingMode) {
+  // iOS 26: fall back to prompt phrasing ("Use the getWeather tool to...")
+}
+
+const response = await FoundationModels.respondWithTools(
+  sessionId,
+  "What's the weather in Tokyo?",
+  { toolCallingMode: 'required' }
+);
+```
+
+### Modes
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `'allowed'` | Model decides whether to call tools (default) | General assistance |
+| `'required'` | Model must issue a tool call | Guaranteed data-backed answers |
+| `'disallowed'` | Tools hidden from the model | Pure text generation, saving tokens |
 
 ## Complete Example
 

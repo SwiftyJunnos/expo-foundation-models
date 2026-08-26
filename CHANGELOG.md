@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+#### iOS 27 Support
+- `FoundationModels.getFeatures()` - Runtime feature detection returning
+  `{ osVersion, features: { privateCloudCompute, imageAttachments, contextOptions, toolCallingMode, tokenCounting, modelVariant } }`
+  (`getAvailability()` gains the same additive fields)
+- Private Cloud Compute sessions via `createSession` option
+  `model: { type: 'privateCloudCompute' }` (iOS 27.0+; rejects with `featureUnavailable` on iOS 26)
+- Multimodal prompts: `respond`/`streamResponse` accept object prompts
+  `{ text, images?: Array<{ uri } | { base64 }> }` (iOS 27.0+; string prompts unchanged)
+- Context options in generation options:
+  `contextOptions: { reasoningLevel?: 'light' | 'moderate' | 'deep', includeSchemaInPrompt?: boolean }` (iOS 27.0+)
+- Tool calling mode in generation options: `toolCallingMode?: 'allowed' | 'required' | 'disallowed'` (iOS 27.0+)
+- `FoundationModels.getTokenCount(text)` and `FoundationModels.getContextSize()` (iOS 26.4+;
+  `getContextSize()` returns `null` below 26.4)
+- `FoundationModels.getModelVariant()` (reserved API; returns `null` on all versions —
+  `SystemLanguageModel.variant` is documented for iOS 27 but absent from the shipped SDK)
+- Native structured output on iOS 27+: JSON Schema → `DynamicGenerationSchema` → `GenerationSchema`
+  (prompt-based fallback retained on iOS 26)
+- Real `ToolOutput` return from tool calls on iOS 27+ (`'{}'` placeholder retained on iOS 26)
+- Example app "iOS 27" tab demonstrating all new capabilities behind `getFeatures()` guards
+
+### Changed
+
+- Normalized error codes: every generation/session/model failure now maps to a single
+  stable `FoundationModelsErrorCode` union (`contextSizeExceeded`, `rateLimited`, `refusal`,
+  `guardrailViolation`, …) with identical behavior on iOS 26 and iOS 27 devices.
+  Replaces the obsoleted `LanguageModelSession.GenerationError` mapping
+  (`exceededContextWindowSize` → `contextSizeExceeded`, `unsupportedGuide` → `unsupportedGenerationGuide`)
+
+### Fixed
+
+- Compile compatibility with the iOS 27 SDK where `LanguageModelSession.GenerationError`,
+  `Transcript.StructuredSegment.source`, and `ToolCallError` were removed/renamed —
+  all references replaced with availability-guarded code paths
+
 ## [1.0.0] - 2025-06-07
 
 ### Added
