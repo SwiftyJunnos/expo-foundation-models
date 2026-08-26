@@ -229,6 +229,82 @@ describe('FoundationModels - Structured Output', () => {
       expect(result).toEqual(['apple', 'banana']);
     });
 
+    it('should forward string schemas with length constraints unchanged', async () => {
+      // Native conversion decides fallback selection; scalar constraints such as
+      // minLength/maxLength must reach the bridge untouched so the prompt
+      // fallback preserves them instead of the facade silently dropping them.
+      const constrainedSchema: JSONSchema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 100 },
+        },
+        required: ['name'],
+      };
+      mockModule.respondWithSchema.mockResolvedValue({ name: 'Alex' });
+
+      const result = await FoundationModels.respondWithSchema(
+        'session-123',
+        'Generate a name',
+        constrainedSchema
+      );
+
+      expect(mockModule.respondWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Generate a name',
+        constrainedSchema,
+        null
+      );
+      expect(result).toEqual({ name: 'Alex' });
+    });
+
+    it('should forward numeric schemas with range constraints unchanged', async () => {
+      const rangedSchema: JSONSchema = {
+        type: 'object',
+        properties: {
+          age: { type: 'integer', minimum: 0, maximum: 150 },
+          score: { type: 'number', minimum: -1.5, maximum: 1.5 },
+        },
+        required: ['age'],
+      };
+      mockModule.respondWithSchema.mockResolvedValue({ age: 30, score: 0.75 });
+
+      const result = await FoundationModels.respondWithSchema(
+        'session-123',
+        'Generate a profile',
+        rangedSchema
+      );
+
+      expect(mockModule.respondWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Generate a profile',
+        rangedSchema,
+        null
+      );
+      expect(result).toEqual({ age: 30, score: 0.75 });
+    });
+
+    it('should forward generation options containing contextOptions unchanged', async () => {
+      mockModule.respondWithSchema.mockResolvedValue({ name: 'Jane', age: 25 });
+      const options: GenerationOptions = {
+        temperature: 0.3,
+        contextOptions: { reasoningLevel: 'deep', includeSchemaInPrompt: false },
+      };
+
+      await FoundationModels.respondWithSchema(
+        'session-123',
+        'Generate a person',
+        personSchema,
+        options
+      );
+
+      expect(mockModule.respondWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Generate a person',
+        personSchema,
+        options
+      );
+    });
+
 
     it('should throw FoundationModelsError when session ID is empty', async () => {
       await expect(
@@ -439,6 +515,93 @@ describe('FoundationModels - Structured Output', () => {
       },
       required: ['title', 'content'],
     };
+
+    it('should forward string schemas with length constraints unchanged while streaming', async () => {
+      const constrainedSchema: JSONSchema = {
+        type: 'object',
+        properties: {
+          title: { type: 'string', minLength: 1, maxLength: 80 },
+        },
+        required: ['title'],
+      };
+      mockModule.streamWithSchema.mockResolvedValue({ title: 'Hello' });
+
+      const result = await FoundationModels.streamWithSchema(
+        'session-123',
+        'Generate a post',
+        constrainedSchema,
+        jest.fn()
+      );
+
+      expect(mockModule.streamWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Generate a post',
+        constrainedSchema,
+        null
+      );
+      expect(result).toEqual({ title: 'Hello' });
+    });
+
+    it('should forward generation options containing contextOptions unchanged', async () => {
+      mockModule.streamWithSchema.mockResolvedValue({ title: 'Hello', content: 'World' });
+      const options: GenerationOptions = {
+        temperature: 0.4,
+        contextOptions: { reasoningLevel: 'moderate', includeSchemaInPrompt: false },
+      };
+
+      await FoundationModels.streamWithSchema(
+        'session-123',
+        'Generate a post',
+        simpleSchema,
+        jest.fn(),
+        options
+      );
+
+      expect(mockModule.streamWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Generate a post',
+        simpleSchema,
+        options
+      );
+    });
+
+    it('should resolve a valid empty object as the final value even when no partial was emitted', async () => {
+      // An empty object is a legitimate generated value (e.g. all properties
+      // optional); it must be returned as the final result rather than being
+      // treated as "no value" — final responses are distinct from partial
+      // snapshots.
+      mockModule.streamWithSchema.mockResolvedValue({});
+      const onPartial = jest.fn();
+
+      const pending = FoundationModels.streamWithSchema(
+        'session-123',
+        'Generate an optional record',
+        { type: 'object', properties: { note: { type: 'string' } } },
+        onPartial
+      );
+
+      await expect(pending).resolves.toEqual({});
+    });
+
+    it('should keep the resolved final value authoritative over interim snapshots', async () => {
+      mockModule.streamWithSchema.mockResolvedValue({});
+      const onPartial = jest.fn();
+
+      const pending = FoundationModels.streamWithSchema(
+        'session-123',
+        'Generate an optional record',
+        { type: 'object', properties: { note: { type: 'string' } } },
+        onPartial
+      );
+      // Interim snapshot arrives before the native promise resolves; the final
+      // resolution must still be whatever the bridge returns, not the snapshot.
+      const handler = mockModule.addListener.mock.calls.find(
+        (call) => call[0] === 'onPartialSchema'
+      )?.[1] as unknown as (event: PartialSchemaEvent) => void;
+      handler({ sessionId: 'session-123', partial: {} });
+
+      await expect(pending).resolves.toEqual({});
+    });
 
     it('should stream structured output and call onPartial for partial results', async () => {
       const mockFinalResponse = { title: 'Hello', content: 'World' };

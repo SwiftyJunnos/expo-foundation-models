@@ -1885,6 +1885,22 @@ final class FoundationModelsManager: @unchecked Sendable {
         }
     }
 
+    /// Guard for the prompt-based schema fallback: that path embeds the JSON
+    /// Schema in the prompt text because embedding it is the only way to keep
+    /// structured output once native schema conversion has failed. When the
+    /// caller explicitly opted out (`includeSchemaInPrompt: false`), fail with
+    /// a normalized error instead of silently contradicting the request.
+    ///
+    /// Reachable on iOS 27+ only: below iOS 27 `validateOSCapabilities()`
+    /// rejects every `contextOptions` payload, and a successful native
+    /// conversion hands the flag to the framework, which honors it there.
+    private func requireFallbackSchemaInPrompt(_ options: FMGenerationOptions) throws {
+        guard options.contextOptions?.includeSchemaInPrompt == false else { return }
+        throw FoundationModelsManagerError.featureUnavailable(
+            "Cannot honor contextOptions.includeSchemaInPrompt = false: the JSON Schema could not be converted to a native generation schema, so the prompt-based fallback must include the schema to preserve structured output"
+        )
+    }
+
     /// Generate structured output using a JSON schema.
     ///
     /// **iOS 27+:** native structured generation via
@@ -1895,7 +1911,12 @@ final class FoundationModelsManager: @unchecked Sendable {
     /// **iOS 26 / conversion fallback:**
     /// The JSON schema is embedded in the prompt and the response is parsed. Image
     /// attachments are preserved via `makePrompt` (or rejected as `featureUnavailable`
-    /// below iOS 27); any JSON root parses, failing explicitly otherwise.
+    /// below iOS 27); any JSON root parses, failing explicitly otherwise. On iOS 27
+    /// the fallback responds through the context-aware overload so
+    /// `contextOptions.reasoningLevel` still applies — and because the schema must
+    /// stay embedded in the prompt there, `includeSchemaInPrompt: false` combined
+    /// with a failed conversion throws `featureUnavailable` (see
+    /// `requireFallbackSchemaInPrompt`).
     /// See: https://github.com/mcp-foundation/expo-foundation-models/issues/1
     func respondWithSchemaAsync(
         sessionId: String,
@@ -1939,9 +1960,24 @@ final class FoundationModelsManager: @unchecked Sendable {
                     images: prompt.images
                 )
 
+                try requireFallbackSchemaInPrompt(options)
+
                 let nativeOptions = options.toNativeOptions()
                 let nativePrompt = try await makePrompt(structuredPrompt)
-                let response = try await session.respond(to: nativePrompt, options: nativeOptions)
+                let response: LanguageModelSession.Response<String>
+                if #available(iOS 27.0, macOS 27.0, *) {
+                    // Context-aware overload so requested reasoning levels and
+                    // schema-prompt behavior are honored even in the fallback
+                    // (below iOS 27 `validateOSCapabilities` rejects
+                    // `contextOptions` earlier).
+                    response = try await session.respond(
+                        to: nativePrompt,
+                        options: nativeOptions,
+                        contextOptions: options.toNativeContextOptions()
+                    )
+                } else {
+                    response = try await session.respond(to: nativePrompt, options: nativeOptions)
+                }
 
                 return try jsonValueFromResponse(response.content)
             } catch {
@@ -2031,7 +2067,16 @@ final class FoundationModelsManager: @unchecked Sendable {
     /// **iOS 26 / conversion fallback:**
     /// Prompt-based streaming with partial JSON parsing on each chunk. Image
     /// attachments are preserved via `makePrompt` (or rejected as `featureUnavailable`
-    /// below iOS 27); any JSON root streams and resolves like any other value.
+    /// below iOS 27); any JSON root streams and resolves like any other value. On
+    /// iOS 27 the fallback streams through the context-aware overload so
+    /// `contextOptions.reasoningLevel` still applies — and because the schema must
+    /// stay embedded in the prompt there, `includeSchemaInPrompt: false` combined
+    /// with a failed conversion throws `featureUnavailable` (see
+    /// `requireFallbackSchemaInPrompt`).
+    ///
+    /// Final-value semantics: the last native snapshot is always the result — even
+    /// when it is a valid empty object `{}` — while empty mid-stream snapshots
+    /// remain suppressed as partial events.
     func streamWithSchemaAsync(
         sessionId: String,
         prompt: FMPrompt,
@@ -2055,15 +2100,20 @@ final class FoundationModelsManager: @unchecked Sendable {
                         contextOptions: options.toNativeContextOptions()
                     )
 
-                    var finalResult: Any?
+                    var lastSnapshot: Any?
                     for try await partialResponse in stream {
                         let value = Self.anyFromGeneratedContent(partialResponse.content)
-                        // Skip empty-object snapshots (early stream noise).
+                        // Track the latest snapshot unconditionally: an empty
+                        // object is a valid FINAL structured result. Empty
+                        // mid-stream `{}` snapshots are only suppressed as
+                        // partial events (early noise), never from the result.
+                        lastSnapshot = value
                         if let dict = value as? [String: Any], dict.isEmpty { continue }
-                        finalResult = value
                         onPartial(value)
                     }
-                    guard let result = finalResult else {
+                    // Distinguish the final response from partials: return the
+                    // last snapshot even when it is an empty object.
+                    guard let result = lastSnapshot else {
                         throw FoundationModelsManagerError.generationFailed(
                             "Structured generation did not return any content"
                         )
@@ -2089,9 +2139,24 @@ final class FoundationModelsManager: @unchecked Sendable {
                     images: prompt.images
                 )
 
+                try requireFallbackSchemaInPrompt(options)
+
                 let nativeOptions = options.toNativeOptions()
                 let nativePrompt = try await makePrompt(structuredPrompt)
-                let stream = session.streamResponse(to: nativePrompt, options: nativeOptions)
+                let stream: LanguageModelSession.ResponseStream<String>
+                if #available(iOS 27.0, macOS 27.0, *) {
+                    // Context-aware overload so requested reasoning levels and
+                    // schema-prompt behavior are honored even in the fallback
+                    // (below iOS 27 `validateOSCapabilities` rejects
+                    // `contextOptions` earlier).
+                    stream = session.streamResponse(
+                        to: nativePrompt,
+                        options: nativeOptions,
+                        contextOptions: options.toNativeContextOptions()
+                    )
+                } else {
+                    stream = session.streamResponse(to: nativePrompt, options: nativeOptions)
+                }
 
                 var accumulatedText = ""
 
@@ -2316,7 +2381,9 @@ final class FoundationModelsManager: @unchecked Sendable {
     /// Convert a JSON Schema dictionary into a native `GenerationSchema` via
     /// `DynamicGenerationSchema`. Supports objects, arrays, string enums, anyOf,
     /// primitives and `$ref`/`$defs`. Throws for unsupported constructs so callers
-    /// can fall back to the prompt-based path.
+    /// can fall back to the prompt-based path — including constrained scalars
+    /// (string `minLength`/`maxLength`, integer/number `minimum`/`maximum`),
+    /// which native primitives cannot express.
     @available(iOS 26.0, macOS 26.0, *)
     private func makeGenerationSchema(fromJSONSchema json: [String: Any]) throws -> GenerationSchema {
         var definitions: [String: Any] = [:]
@@ -2345,6 +2412,26 @@ final class FoundationModelsManager: @unchecked Sendable {
             builtDefinitions[name] = resolved
             dependencies.append(resolved)
             return resolved
+        }
+
+        // Native primitives (`String`/`Int`/`Double`) carry no length or range
+        // bounds, so converting a constrained scalar would silently drop the
+        // constraint. Throw instead: callers fall back to the prompt path,
+        // where the embedded JSON Schema text keeps the bound visible.
+        // exclusiveMinimum/exclusiveMaximum are intentionally not checked — the
+        // public JSONSchema type does not declare them.
+        func rejectUnenforceableScalarConstraints(
+            _ schemaDict: [String: Any],
+            keys: [String],
+            typeName: String,
+            nameHint: String?
+        ) throws {
+            let declared = keys.filter { schemaDict[$0] != nil }
+            guard !declared.isEmpty else { return }
+            let quoted = declared.map { "'\($0)'" }.joined(separator: ", ")
+            throw FoundationModelsManagerError.generationFailed(
+                "Unsupported JSON Schema constraint\(declared.count > 1 ? "s" : "") \(quoted) on \(typeName) '\(nameHint ?? "root")': native structured output cannot enforce it; falling back to the prompt path"
+            )
         }
 
         func dynamicSchema(from schemaDict: [String: Any], nameHint: String?) throws -> DynamicGenerationSchema {
@@ -2397,10 +2484,13 @@ final class FoundationModelsManager: @unchecked Sendable {
                     maximumElements: schemaDict["maxItems"] as? Int
                 )
             case "string":
+                try rejectUnenforceableScalarConstraints(schemaDict, keys: ["minLength", "maxLength"], typeName: "string", nameHint: nameHint)
                 return DynamicGenerationSchema(type: String.self)
             case "integer":
+                try rejectUnenforceableScalarConstraints(schemaDict, keys: ["minimum", "maximum"], typeName: "integer", nameHint: nameHint)
                 return DynamicGenerationSchema(type: Int.self)
             case "number":
+                try rejectUnenforceableScalarConstraints(schemaDict, keys: ["minimum", "maximum"], typeName: "number", nameHint: nameHint)
                 return DynamicGenerationSchema(type: Double.self)
             case "boolean":
                 return DynamicGenerationSchema(type: Bool.self)

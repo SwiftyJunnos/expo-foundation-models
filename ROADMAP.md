@@ -463,6 +463,13 @@ prompt-based fallback is retained unchanged. Tool calling itself uses the same
 JavaScript-driven prompt flow on every OS version — the model returns a JSON tool call and
 generation continues through `submitToolResult`; results are never fabricated natively.
 
+Scalar string/numeric constraints (`minLength`/`maxLength`, `minimum`/`maximum`) and
+non-string enums cannot be expressed by the iOS 27 native conversion and take the
+prompt fallback instead — the schema text is embedded in the prompt there, so
+`contextOptions.includeSchemaInPrompt: false` rejects with a normalized error for a
+falling-back schema while `reasoningLevel` still applies through the context-aware
+overloads.
+
 ## Implementation Status
 
 All phases completed for v1.0.0; Phase 8 (iOS 27 support) completed for the next release.

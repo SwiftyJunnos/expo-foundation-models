@@ -29,12 +29,21 @@ Generate JSON conforming to schemas or constrain output to specific choices.
 > or earlier, image attachments reject explicitly with error code `featureUnavailable`;
 > images are never silently dropped.
 >
-> **Non-string enums** cannot be expressed safely by the iOS 27 native schema
-> conversion (`GenerationSchema` has no direct representation for numeric/boolean
-> enum values). Schemas containing such enums automatically take the prompt-based
-> fallback on iOS 27 as well — the enum constraint is preserved via prompt
-> instructions instead of being silently dropped. The JS facade forwards your
-> schema unchanged; the native layer decides which path applies.
+> **Scalar constraints and non-string enums** cannot be expressed safely by the
+> iOS 27 native schema conversion. Schemas containing string `minLength`/`maxLength`
+> or numeric `minimum`/`maximum` bounds, or enums whose values are not strings
+> (numeric, boolean, or mixed), automatically take the prompt-based fallback on
+> iOS 27 as well — the constraints are preserved via prompt instructions instead of
+> being silently dropped. The JS facade forwards your schema unchanged; the native
+> layer decides which path applies.
+>
+> **Schema fallback and `includeSchemaInPrompt`:** when a schema takes this prompt
+> fallback, the schema text is necessarily embedded in the prompt to preserve
+> structured output. `contextOptions.includeSchemaInPrompt: false` cannot suppress
+> it there — combining `false` with a schema that falls back rejects with an
+> explicit normalized feature/generation error rather than silently contradicting
+> the setting. `contextOptions.reasoningLevel` is unaffected: it always reaches
+> the context-aware response/streaming overload on iOS 27 on both paths.
 >
 > The library selects the path automatically at runtime — check
 > `(await FoundationModels.getFeatures()).osVersion` if you need to know which one applies.
@@ -266,6 +275,12 @@ const result = await FoundationModels.streamWithSchema(
 
 console.log('Final:', result);
 ```
+
+The promise resolves to the **final** generated value, which is authoritative over
+any interim partial snapshot — including the empty object `{}`: for schemas where
+every property is optional, `{}` is a valid final result and is returned as-is
+rather than being treated as "no value". Partial callbacks only ever receive
+interim snapshots and never influence the resolved value.
 
 ## TypeScript Integration
 

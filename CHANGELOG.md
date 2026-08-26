@@ -59,8 +59,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   native unchanged; when iOS 27 schema conversion cannot express them safely they
   throw there so the existing prompt-based fallback preserves the enum constraint
   instead of silently dropping it
-- `respondWithChoices` forwards `contextOptions` unchanged through the context-aware
-  response overload on iOS 27 (iOS 26 still rejects with `featureUnavailable`)
+- Scalar JSON Schema constraints (string `minLength`/`maxLength`, numeric
+  `minimum`/`maximum`) are forwarded to native unchanged; like non-string enums,
+  schemas containing them throw during iOS 27 native schema conversion so the
+  existing prompt-based fallback preserves the constraints instead of silently
+  dropping them
+  The prompt fallback embeds the schema text by design, so
+  `contextOptions.includeSchemaInPrompt: false` cannot suppress it for a
+  falling-back schema — that combination rejects with a normalized
+  feature/generation error. `contextOptions.reasoningLevel` still reaches the
+  context-aware response/streaming overloads on iOS 27 on both paths.
+- `respondWithSchema`, `respondWithChoices`, and `streamWithSchema` forward
+  generation options containing `contextOptions` unchanged through the context-aware
+  overloads on iOS 27 (iOS 26 still rejects with `featureUnavailable`)
+  so `reasoningLevel` applies on both the native and prompt-fallback paths
+- `streamWithSchema` resolves with the bridge's final generated value, which is
+  authoritative over interim partial snapshots; a valid empty object `{}` (all
+  properties optional) is returned as-is as the final result
 
 ### Fixed
 

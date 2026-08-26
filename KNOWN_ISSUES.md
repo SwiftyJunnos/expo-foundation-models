@@ -63,6 +63,25 @@ fallback instead — the enum constraint is preserved via prompt instructions ra
 than silently dropped. The JS facade forwards the schema unchanged; the choice is
 made in native code.
 
+**Scalar constraints:** like non-string enums, string `minLength`/`maxLength` and
+numeric `minimum`/`maximum` bounds cannot be expressed safely by the iOS 27 native
+schema conversion. Schemas containing such constraints throw during native
+conversion and take the prompt-based fallback instead — the bounds are preserved
+via prompt instructions rather than silently dropped. The JS facade forwards the
+schema unchanged; the choice is made in native code.
+
+**Fallback schema vs. `includeSchemaInPrompt`:** the prompt-based fallback must
+embed the JSON schema text to preserve structured output. Setting
+`contextOptions.includeSchemaInPrompt: false` cannot suppress it for a schema that
+falls back — that combination rejects with an explicit normalized feature/generation
+error instead of silently contradicting the setting. `contextOptions.reasoningLevel`
+still reaches the context-aware response/streaming overload on iOS 27 on both paths.
+
+**Streaming empty results:** `streamWithSchema` resolves with the final generated
+value from the bridge, which is authoritative over any interim partial snapshot. A
+valid empty object `{}` (all properties optional) is returned as-is as the final
+result rather than being treated as "no value".
+
 ### Root Schemas and Image Attachments
 
 - **Non-object roots:** Schemas whose root is an array, string, number, boolean, or null
