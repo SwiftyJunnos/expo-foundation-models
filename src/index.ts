@@ -3,6 +3,11 @@ import ExpoFoundationModelsModule, { isNativeModuleAvailable } from './ExpoFound
 import type {
   MLValue,
   MLDictionary,
+  ContextOptions,
+  FoundationModelsErrorCode,
+  FoundationModelsErrorObject,
+  FoundationModelsFeatures,
+  FeaturesResult,
   GenerationOptions,
   SamplingMode,
   TokenEvent,
@@ -27,6 +32,11 @@ import type {
   CreateSessionWithTranscriptOptions,
   GuardrailsMode,
   ModelUseCase,
+  ModelVariantInfo,
+  PccModelSpecifier,
+  PromptImage,
+  PromptWithAttachments,
+  ToolCallingMode,
   ExtendedSessionOptions,
   AdapterDownloadStatus,
   AdapterInfo,
@@ -56,6 +66,11 @@ import type {
 export type {
   MLValue,
   MLDictionary,
+  ContextOptions,
+  FoundationModelsErrorCode,
+  FoundationModelsErrorObject,
+  FoundationModelsFeatures,
+  FeaturesResult,
   GenerationOptions,
   SamplingMode,
   TokenEvent,
@@ -80,6 +95,11 @@ export type {
   CreateSessionWithTranscriptOptions,
   GuardrailsMode,
   ModelUseCase,
+  ModelVariantInfo,
+  PccModelSpecifier,
+  PromptImage,
+  PromptWithAttachments,
+  ToolCallingMode,
   ExtendedSessionOptions,
   AdapterDownloadStatus,
   AdapterInfo,
@@ -154,14 +174,74 @@ function assertSessionId(sessionId: unknown): asserts sessionId is string {
 }
 
 /**
- * Assert that a prompt is valid.
+ * Assert that a prompt is a valid string or a prompt object with attachments.
+ *
+ * String form: non-empty string.
+ * Object form ({@link PromptWithAttachments}): `text` must be a non-empty
+ * string and each entry in `images` must carry exactly one of `uri` or
+ * `base64`.
+ *
  * @throws {FoundationModelsError} If validation fails
  */
-function assertPrompt(prompt: unknown, errorType: GenerationErrorType = 'generationFailed'): asserts prompt is string {
-  if (!prompt || typeof prompt !== 'string') {
-    throw new FoundationModelsError('Prompt must be a non-empty string', {
+function assertPromptInput(
+  prompt: unknown,
+  errorType: GenerationErrorType = 'generationFailed'
+): asserts prompt is string | PromptWithAttachments {
+  if (typeof prompt === 'string') {
+    if (!prompt) {
+      throw new FoundationModelsError('Prompt must be a non-empty string', {
+        type: errorType,
+      });
+    }
+    return;
+  }
+  if (!prompt || typeof prompt !== 'object') {
+    throw new FoundationModelsError(
+      'Prompt must be a non-empty string or an object with text and optional images',
+      { type: errorType }
+    );
+  }
+  const p = prompt as Record<string, unknown>;
+  if (typeof p.text !== 'string' || !p.text) {
+    throw new FoundationModelsError('Prompt text must be a non-empty string', {
       type: errorType,
     });
+  }
+  if (p.images === undefined) {
+    return;
+  }
+  if (!Array.isArray(p.images)) {
+    throw new FoundationModelsError('Prompt images must be an array', {
+      type: errorType,
+    });
+  }
+  for (const image of p.images) {
+    if (!image || typeof image !== 'object') {
+      throw new FoundationModelsError(
+        'Each prompt image must be an object with exactly one of uri or base64',
+        { type: errorType }
+      );
+    }
+    const img = image as Record<string, unknown>;
+    const hasOwn = (key: string) => Object.prototype.hasOwnProperty.call(img, key);
+    const hasUriField = hasOwn('uri');
+    const hasBase64Field = hasOwn('base64');
+    if (hasUriField === hasBase64Field) {
+      // Both fields present (even when one is empty) or neither present.
+      throw new FoundationModelsError(
+        'Each prompt image must have exactly one of uri or base64',
+        { type: errorType }
+      );
+    }
+    // The single present own field must carry a non-empty string so an
+    // ambiguous image never crosses the bridge to fail natively.
+    const field = hasUriField ? 'uri' : 'base64';
+    const value = img[field];
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new FoundationModelsError(`Prompt image ${field} must be a non-empty string`, {
+        type: errorType,
+      });
+    }
   }
 }
 
@@ -394,6 +474,9 @@ export class FoundationModelsError extends Error {
   /** Legacy error code (for backward compatibility) */
   public readonly code?: string;
 
+  /** Normalized cross-platform error code reported by the native layer */
+  public readonly errorCode?: FoundationModelsErrorCode;
+
   /** Root cause of the error */
   public readonly cause?: FoundationModelsErrorCause;
 
@@ -408,6 +491,7 @@ export class FoundationModelsError extends Error {
     options?: {
       type?: GenerationErrorType;
       code?: string;
+      errorCode?: FoundationModelsErrorCode;
       refusalExplanation?: string;
       context?: string;
       cause?: FoundationModelsErrorCause;
@@ -419,6 +503,7 @@ export class FoundationModelsError extends Error {
     this.name = 'FoundationModelsError';
     this.type = options?.type ?? 'unknown';
     this.code = options?.code;
+    this.errorCode = options?.errorCode;
     this.refusalExplanation = options?.refusalExplanation;
     this.context = options?.context;
     this.cause = options?.cause;
@@ -724,6 +809,34 @@ export const CoreML = {
   },
 };
 
+/** Feature flags reported when Foundation Models is not usable (non-iOS, missing native module, or failure). */
+const ALL_FEATURES_UNAVAILABLE: FoundationModelsFeatures = {
+  privateCloudCompute: false,
+  imageAttachments: false,
+  contextOptions: false,
+  toolCallingMode: false,
+  tokenCounting: false,
+  modelVariant: false,
+};
+
+/** All valid values of {@link FoundationModelsErrorCode}, for runtime validation of native payloads. */
+const FOUNDATION_MODELS_ERROR_CODES: readonly FoundationModelsErrorCode[] = [
+  'contextSizeExceeded',
+  'rateLimited',
+  'refusal',
+  'guardrailViolation',
+  'unsupportedLanguageOrLocale',
+  'unsupportedCapability',
+  'assetsUnavailable',
+  'concurrentRequests',
+  'timeout',
+  'transcriptMutationWhileResponding',
+  'unsupportedGenerationGuide',
+  'decodingFailure',
+  'featureUnavailable',
+  'unknown',
+];
+
 /**
  * FoundationModels - Expo bridge for Apple Intelligence on-device LLM.
  *
@@ -768,61 +881,6 @@ export const FoundationModels = {
   },
 
   /**
-   * Get detailed availability information for Foundation Models.
-   *
-   * This provides more context than `isAvailable()`, including the specific
-   * reason why Foundation Models may be unavailable.
-   *
-   * @returns Availability object with status and optional reason
-   *
-   * @example
-   * ```typescript
-   * const availability = FoundationModels.getAvailability();
-   * if (!availability.available) {
-   *   switch (availability.reason) {
-   *     case 'deviceNotEligible':
-   *       console.log('This device does not support Apple Intelligence');
-   *       break;
-   *     case 'appleIntelligenceNotEnabled':
-   *       console.log('Please enable Apple Intelligence in Settings');
-   *       break;
-   *     case 'modelNotReady':
-   *       console.log('Model is still downloading...');
-   *       break;
-   *   }
-   * }
-   * ```
-   */
-  getAvailability(): Availability {
-    if (Platform.OS !== 'ios') {
-      return {
-        available: false,
-        status: 'unavailable',
-        reason: 'platformNotSupported',
-      };
-    }
-    // Check if native module is available
-    if (!isNativeModuleAvailable()) {
-      return {
-        available: false,
-        status: 'unavailable',
-        reason: 'nativeModuleNotAvailable' as UnavailableReason,
-        message: 'Native module not properly linked',
-      };
-    }
-    try {
-      return ExpoFoundationModelsModule.getAvailability() as Availability;
-    } catch (error) {
-      return {
-        available: false,
-        status: 'unavailable',
-        reason: 'unknown' as UnavailableReason,
-        message: error instanceof Error ? error.message : String(error),
-      };
-    }
-  },
-
-  /**
    * Get device locale information for debugging language support issues.
    *
    * This is useful for diagnosing "unsupported language" errors when the
@@ -859,7 +917,7 @@ export const FoundationModels = {
       };
     }
     try {
-      return ExpoFoundationModelsModule.getLocaleInfo() as LocaleInfo;
+      return ExpoFoundationModelsModule.getLocaleInfo();
     } catch (error) {
       console.warn('[FoundationModels] getLocaleInfo() failed:', error);
       return {
@@ -869,6 +927,160 @@ export const FoundationModels = {
         preferredLanguages: [],
         calendar: 'error',
       };
+    }
+  },
+
+  /**
+   * Get detailed availability information for Foundation Models.
+   *
+   * This provides more context than `isAvailable()`, including the specific
+   * reason why Foundation Models may be unavailable, plus OS version and
+   * iOS 27+ feature flags when reported by the native layer.
+   *
+   * @returns Availability object with status and optional reason
+   *
+   * @example
+   * ```typescript
+   * const availability = FoundationModels.getAvailability();
+   * if (!availability.available) {
+   *   switch (availability.reason) {
+   *     case 'deviceNotEligible':
+   *       console.log('This device does not support Apple Intelligence');
+   *       break;
+   *     case 'appleIntelligenceNotEnabled':
+   *       console.log('Please enable Apple Intelligence in Settings');
+   *       break;
+   *     case 'modelNotReady':
+   *       console.log('Model is still downloading...');
+   *       break;
+   *   }
+   * }
+   * ```
+   */
+  getAvailability(): Availability {
+    if (Platform.OS !== 'ios') {
+      return {
+        available: false,
+        status: 'unavailable',
+        reason: 'platformNotSupported',
+        osVersion: Platform.Version?.toString() ?? 'unknown',
+        features: ALL_FEATURES_UNAVAILABLE,
+      };
+    }
+    // Check if native module is available
+    if (!isNativeModuleAvailable()) {
+      return {
+        available: false,
+        status: 'unavailable',
+        reason: 'nativeModuleNotAvailable',
+        message: 'Native module not properly linked',
+        osVersion: Platform.Version?.toString() ?? 'unknown',
+        features: ALL_FEATURES_UNAVAILABLE,
+      };
+    }
+    try {
+      return ExpoFoundationModelsModule.getAvailability();
+    } catch (error) {
+      return {
+        available: false,
+        status: 'unavailable',
+        reason: 'unknown',
+        message: error instanceof Error ? error.message : String(error),
+        osVersion: Platform.Version?.toString() ?? 'unknown',
+        features: ALL_FEATURES_UNAVAILABLE,
+      };
+    }
+  },
+
+  /**
+   * Get the Foundation Models feature flags supported on this device, together
+   * with the OS version they were reported for.
+   *
+   * All flags are `false` when Foundation Models is not usable (non-iOS,
+   * missing native module) or on OS versions below each feature's minimum
+   * (`tokenCounting`: iOS 26.4+, all others: iOS 27+).
+   *
+   * @returns OS version and nested feature flags
+   *
+   * @example
+   * ```typescript
+   * const { osVersion, features } = await FoundationModels.getFeatures();
+   * if (features.imageAttachments) {
+   *   await FoundationModels.respond(sessionId, {
+   *     text: 'What is in this image?',
+   *     images: [{ uri: 'file:///tmp/photo.jpg' }]
+   *   });
+   * }
+   * ```
+   */
+  async getFeatures(): Promise<FeaturesResult> {
+    const fallback: FeaturesResult = {
+      osVersion: Platform.Version?.toString() ?? 'unknown',
+      features: ALL_FEATURES_UNAVAILABLE,
+    };
+    if (Platform.OS !== 'ios' || !isNativeModuleAvailable()) {
+      return fallback;
+    }
+    try {
+      return await ExpoFoundationModelsModule.getFeatures();
+    } catch (error) {
+      console.warn('[FoundationModels] getFeatures() failed:', error);
+      return fallback;
+    }
+  },
+
+  /**
+   * Count the tokens the system model would use for the given text.
+   *
+   * Requires iOS 26.4+; fails with a `featureUnavailable` normalized error on
+   * older versions.
+   *
+   * @param text - The text to count tokens for
+   * @returns Promise resolving to the token count
+   * @throws {FoundationModelsError} If counting fails or the OS is too old
+   */
+  async getTokenCount(text: string): Promise<number> {
+    assertIOSForFoundationModels();
+    assertNonEmptyString(text, 'Text');
+
+    try {
+      return await ExpoFoundationModelsModule.getTokenCount(text);
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to count tokens', 'TOKEN_COUNT_FAILED');
+    }
+  },
+
+  /**
+   * Get the context window size of the system model, in tokens.
+   *
+   * Requires iOS 26.4+; resolves to `null` on older versions.
+   *
+   * @returns Promise resolving to the context size, or null when unavailable
+   */
+  async getContextSize(): Promise<number | null> {
+    assertIOSForFoundationModels();
+
+    try {
+      return await ExpoFoundationModelsModule.getContextSize();
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to get context size', 'CONTEXT_SIZE_FAILED');
+    }
+  },
+
+  /**
+   * Get information about the current model variant.
+   *
+   * Requires iOS 27+; resolves to `null` on older versions.
+   *
+   * @returns Promise resolving to variant info, or null when unavailable
+   */
+  async getModelVariant(): Promise<ModelVariantInfo | null> {
+    assertIOSForFoundationModels();
+
+    try {
+      return await ExpoFoundationModelsModule.getModelVariant();
+    } catch (error) {
+      throw parseNativeError(error, 'Failed to get model variant', 'MODEL_VARIANT_FAILED');
     }
   },
 
@@ -1050,14 +1262,22 @@ export const FoundationModels = {
       // Handle new options object API
       const options = optionsOrInstructions;
 
-      // If options contain advanced config (tools, guardrails, useCase, or adapterId), use createSessionWithConfig
-      if (options.tools && options.tools.length > 0 || options.guardrails || options.useCase || options.adapterId) {
+      // If options contain advanced config (model, tools, guardrails, useCase, or
+      // adapterId), use createSessionWithConfig
+      if (
+        options.model ||
+        (options.tools && options.tools.length > 0) ||
+        options.guardrails ||
+        options.useCase ||
+        options.adapterId
+      ) {
         return await ExpoFoundationModelsModule.createSessionWithConfig({
           instructions: options.instructions,
           guardrails: options.guardrails,
           useCase: options.useCase,
           tools: options.tools,
           adapterId: options.adapterId,
+          model: options.model,
         });
       }
 
@@ -1095,11 +1315,11 @@ export const FoundationModels = {
    */
   async respond(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     options?: GenerationOptions
   ): Promise<string> {
     assertSessionId(sessionId);
-    assertPrompt(prompt);
+    assertPromptInput(prompt);
 
     try {
       return await ExpoFoundationModelsModule.respond(sessionId, prompt, options ?? null);
@@ -1120,12 +1340,12 @@ export const FoundationModels = {
    */
   async streamResponse(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     onToken: (token: string) => void,
     options?: GenerationOptions
   ): Promise<string> {
     assertSessionId(sessionId);
-    assertPrompt(prompt, 'streamingFailed');
+    assertPromptInput(prompt, 'streamingFailed');
 
     const subscription = ExpoFoundationModelsModule.addListener('onToken', (event: TokenEvent) => {
       if (event.sessionId === sessionId) {
@@ -1154,7 +1374,10 @@ export const FoundationModels = {
    * @param prompt - The user prompt
    * @param schema - JSON Schema defining the expected output structure
    * @param options - Optional generation options
-   * @returns Promise resolving to an object matching the schema
+   * @returns Promise resolving to the generated value matching the schema.
+   * Object roots resolve to an object; non-object roots (array, string,
+   * number, boolean) resolve to the generated value as-is — pass an explicit
+   * generic when the root is not an object.
    * @throws {FoundationModelsError} If generation fails
    *
    * @example
@@ -1178,13 +1401,13 @@ export const FoundationModels = {
    */
   async respondWithSchema<T = Record<string, unknown>>(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     schema: JSONSchema,
     options?: GenerationOptions
   ): Promise<T> {
     assertIOSForFoundationModels();
     assertSessionId(sessionId);
-    assertPrompt(prompt);
+    assertPromptInput(prompt);
     assertSchema(schema);
 
     try {
@@ -1222,13 +1445,13 @@ export const FoundationModels = {
    */
   async respondWithChoices(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     choices: string[],
     options?: GenerationOptions
   ): Promise<string> {
     assertIOSForFoundationModels();
     assertSessionId(sessionId);
-    assertPrompt(prompt);
+    assertPromptInput(prompt);
     assertChoices(choices);
 
     try {
@@ -1252,19 +1475,21 @@ export const FoundationModels = {
    * @param schema - JSON Schema defining the expected output structure
    * @param onPartial - Callback invoked with partial results as they're generated
    * @param options - Optional generation options
-   * @returns Promise resolving to the complete object matching the schema
+   * @returns Promise resolving to the complete generated value matching the
+   * schema; non-object roots resolve to the value as-is (pass an explicit
+   * generic). Partial events may carry any JSON value for non-object roots.
    * @throws {FoundationModelsError} If streaming fails
    */
   async streamWithSchema<T = Record<string, unknown>>(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     schema: JSONSchema,
     onPartial: (partial: Partial<T>) => void,
     options?: GenerationOptions
   ): Promise<T> {
     assertIOSForFoundationModels();
     assertSessionId(sessionId);
-    assertPrompt(prompt, 'streamingFailed');
+    assertPromptInput(prompt, 'streamingFailed');
     assertSchema(schema, 'streamingFailed');
 
     const subscription = ExpoFoundationModelsModule.addListener(
@@ -1360,12 +1585,12 @@ export const FoundationModels = {
    */
   async respondWithTools(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     options?: GenerationOptions
   ): Promise<ToolResponse> {
     assertIOSForFoundationModels();
     assertSessionId(sessionId);
-    assertPrompt(prompt);
+    assertPromptInput(prompt);
 
     try {
       return await ExpoFoundationModelsModule.respondWithTools(sessionId, prompt, options ?? null);
@@ -1414,13 +1639,13 @@ export const FoundationModels = {
    */
   async streamWithTools(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     callbacks: StreamWithToolsCallbacks,
     options?: GenerationOptions
   ): Promise<ToolResponse> {
     assertIOSForFoundationModels();
     assertSessionId(sessionId);
-    assertPrompt(prompt, 'streamingFailed');
+    assertPromptInput(prompt, 'streamingFailed');
 
     const tokenSubscription = ExpoFoundationModelsModule.addListener(
       'onToken',
@@ -1761,11 +1986,35 @@ function parseNativeError(
     const message = error.message;
     const lowerMessage = message.toLowerCase();
 
+    // A native featureUnavailable type is authoritative even when older native
+    // code reports the broader unsupportedCapability normalized code.
+    const nativeType = nativeInfo?.type as string | undefined;
+    if (
+      nativeInfo?.normalizedCode === 'featureUnavailable' ||
+      nativeType === 'featureUnavailable'
+    ) {
+      return new FoundationModelsError(message, {
+        type: 'notAvailable',
+        code: 'FEATURE_UNAVAILABLE',
+        errorCode: 'featureUnavailable',
+        cause:
+          nativeInfo?.normalizedCode === 'unsupportedCapability'
+            ? undefined
+            : 'unsupportedOSVersion',
+        context: nativeInfo?.context,
+        diagnostics: nativeInfo?.diagnostics,
+        suggestions: nativeInfo?.suggestions ?? [
+          'This capability is unavailable on this device or OS version',
+          'Check FoundationModels.getFeatures() before using version-gated APIs',
+        ],
+      });
+    }
     // Check for known error patterns and map to causes
     if (lowerMessage.includes('guardrail') || lowerMessage.includes('safety') || lowerMessage.includes('blocked')) {
       return new FoundationModelsError(message, {
         type: 'guardrailViolation',
         code: 'GUARDRAIL_VIOLATION',
+        errorCode: nativeInfo?.normalizedCode,
         cause: 'guardrailViolation',
         context: nativeInfo?.context,
         diagnostics: nativeInfo?.diagnostics,
@@ -1780,6 +2029,7 @@ function parseNativeError(
       return new FoundationModelsError(message, {
         type: 'refusal',
         code: 'REFUSAL',
+        errorCode: nativeInfo?.normalizedCode,
         cause: 'contentRefused',
         refusalExplanation: nativeInfo?.refusalExplanation,
         context: nativeInfo?.context,
@@ -1795,6 +2045,7 @@ function parseNativeError(
       return new FoundationModelsError(message, {
         type: 'generationFailed',
         code: 'CONTEXT_EXCEEDED',
+        errorCode: nativeInfo?.normalizedCode,
         cause: 'contextWindowExceeded',
         diagnostics: nativeInfo?.diagnostics,
         suggestions: nativeInfo?.suggestions ?? [
@@ -1817,6 +2068,7 @@ function parseNativeError(
       return new FoundationModelsError(message, {
         type: 'notAvailable',
         code: 'NOT_AVAILABLE',
+        errorCode: nativeInfo?.normalizedCode,
         cause,
         diagnostics: nativeInfo?.diagnostics,
         suggestions: nativeInfo?.suggestions ?? [getFoundationModelsCauseExplanation(cause)],
@@ -1827,6 +2079,7 @@ function parseNativeError(
       return new FoundationModelsError(message, {
         type: 'sessionNotFound',
         code: 'SESSION_NOT_FOUND',
+        errorCode: nativeInfo?.normalizedCode,
         cause: 'sessionExpired',
         suggestions: nativeInfo?.suggestions ?? [
           'Create a new session and try again',
@@ -1839,6 +2092,7 @@ function parseNativeError(
       return new FoundationModelsError(message, {
         type: 'unsupportedLanguage',
         code: 'UNSUPPORTED_LANGUAGE',
+        errorCode: nativeInfo?.normalizedCode,
         cause: 'unsupportedLanguage',
         suggestions: nativeInfo?.suggestions ?? [
           'Use a supported language (English, etc.)',
@@ -1851,6 +2105,7 @@ function parseNativeError(
       return new FoundationModelsError(message, {
         type: 'generationFailed',
         code: 'INPUT_TOO_LONG',
+        errorCode: nativeInfo?.normalizedCode,
         cause: 'inputTooLong',
         suggestions: nativeInfo?.suggestions ?? [
           'Shorten your prompt',
@@ -1863,6 +2118,7 @@ function parseNativeError(
     return new FoundationModelsError(`${fallbackMessage}: ${message}`, {
       type: nativeInfo?.type ?? 'generationFailed',
       code: fallbackCode,
+      errorCode: nativeInfo?.normalizedCode,
       cause: nativeInfo?.cause,
       context: nativeInfo?.context,
       diagnostics: nativeInfo?.diagnostics,
@@ -1883,6 +2139,7 @@ function parseNativeError(
 function extractNativeErrorInfo(error: unknown): {
   type?: GenerationErrorType;
   cause?: FoundationModelsErrorCause;
+  normalizedCode?: FoundationModelsErrorCode;
   refusalExplanation?: string;
   context?: string;
   diagnostics?: FoundationModelsDiagnostics;
@@ -1903,6 +2160,13 @@ function extractNativeErrorInfo(error: unknown): {
 
   if (typeof errorObj.cause === 'string') {
     result.cause = errorObj.cause as FoundationModelsErrorCause;
+  }
+
+  if (
+    typeof errorObj.code === 'string' &&
+    (FOUNDATION_MODELS_ERROR_CODES as readonly string[]).includes(errorObj.code)
+  ) {
+    result.normalizedCode = errorObj.code as FoundationModelsErrorCode;
   }
 
   if (typeof errorObj.refusalExplanation === 'string') {

@@ -4,6 +4,7 @@
 jest.mock('react-native', () => ({
   Platform: {
     OS: 'ios',
+    Version: '27.0',
     select: jest.fn((options) => options.ios),
   },
 }));
@@ -11,6 +12,7 @@ jest.mock('react-native', () => ({
 // Mock the native module
 jest.mock('./src/ExpoFoundationModelsModule', () => ({
   __esModule: true,
+  isNativeModuleAvailable: jest.fn(() => true),
   default: {
     // CoreML functions
     loadModel: jest.fn(),
@@ -19,9 +21,13 @@ jest.mock('./src/ExpoFoundationModelsModule', () => ({
     isModelLoaded: jest.fn(),
     getLoadedModels: jest.fn(),
 
-    // Foundation Models functions
     isAvailable: jest.fn(),
     getAvailability: jest.fn(),
+    getLocaleInfo: jest.fn(),
+    getFeatures: jest.fn(),
+    getTokenCount: jest.fn(),
+    getContextSize: jest.fn(),
+    getModelVariant: jest.fn(),
     createSession: jest.fn(),
     closeSession: jest.fn(),
     respond: jest.fn(),

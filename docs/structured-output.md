@@ -2,23 +2,51 @@
 
 Generate JSON conforming to schemas or constrain output to specific choices.
 
-> **iOS 26 Beta Workaround**
+> **iOS Version Behavior**
 >
-> The `DynamicGenerationSchema` API doesn't support runtime schema construction in current iOS 26 betas.
-> 
-> **Current Implementation:**
-> We use a **prompt-based workaround**:
-> 1. The JSON schema is serialized and included in the prompt
-> 2. The model is instructed to output valid JSON matching the schema
-> 3. The response is parsed and validated
+> - **iOS 27.0+** — Native path. The JSON Schema you pass is converted natively
+>   (`DynamicGenerationSchema` → `GenerationSchema`), so output is enforced by the
+>   framework instead of relying on prompt instructions. Same wire format
+>   (JSON Schema in, JSON object out) — no code changes needed.
+> - **iOS 26.x** — Prompt-based fallback. `DynamicGenerationSchema` does not support
+>   runtime schema construction there, so:
+>   1. The JSON schema is serialized and included in the prompt
+>   2. The model is instructed to output valid JSON matching the schema
+>   3. The response is parsed and validated
 >
-> **Limitations:**
-> - Results may vary - the model might not always produce valid JSON
-> - No native schema enforcement (the model can still produce invalid output)
-> - Slightly higher token usage due to schema in prompt
+> **On iOS 26 the following limitations remain:** results may vary (the model might not
+> always produce valid JSON), no native schema enforcement, slightly higher token usage,
+> and partial JSON parsing during streaming may fail.
 >
-> This workaround will be replaced with native `DynamicGenerationSchema` support when Apple stabilizes the API.
-> See [GitHub Issue #1](https://github.com/mcp-foundation/expo-foundation-models/issues/1) for updates.
+> **Non-object root schemas** are supported on both paths: a schema whose root is an
+> array, string, number, boolean, or null returns the generated value directly — native
+> conversion (`anyFromGeneratedContent`) on iOS 27+, JSON parsing of the response text on
+> the iOS 26 fallback. There is no object-wrapping and no post-generation failure for
+> non-object roots.
+>
+> **Image attachments** in a structured-output prompt are always forwarded to the model
+> through a native `Prompt` with attachments — including on the fallback path. On iOS 26
+> or earlier, image attachments reject explicitly with error code `featureUnavailable`;
+> images are never silently dropped.
+>
+> **Scalar constraints and non-string enums** cannot be expressed safely by the
+> iOS 27 native schema conversion. Schemas containing string `minLength`/`maxLength`
+> or numeric `minimum`/`maximum` bounds, or enums whose values are not strings
+> (numeric, boolean, or mixed), automatically take the prompt-based fallback on
+> iOS 27 as well — the constraints are preserved via prompt instructions instead of
+> being silently dropped. The JS facade forwards your schema unchanged; the native
+> layer decides which path applies.
+>
+> **Schema fallback and `includeSchemaInPrompt`:** when a schema takes this prompt
+> fallback, the schema text is necessarily embedded in the prompt to preserve
+> structured output. `contextOptions.includeSchemaInPrompt: false` cannot suppress
+> it there — combining `false` with a schema that falls back rejects with an
+> explicit normalized feature/generation error rather than silently contradicting
+> the setting. `contextOptions.reasoningLevel` is unaffected: it always reaches
+> the context-aware response/streaming overload on iOS 27 on both paths.
+>
+> The library selects the path automatically at runtime — check
+> `(await FoundationModels.getFeatures()).osVersion` if you need to know which one applies.
 
 ## JSON Schema Generation
 
@@ -247,6 +275,12 @@ const result = await FoundationModels.streamWithSchema(
 
 console.log('Final:', result);
 ```
+
+The promise resolves to the **final** generated value, which is authoritative over
+any interim partial snapshot — including the empty object `{}`: for schemas where
+every property is optional, `{}` is a valid final result and is returned as-is
+rather than being treated as "no value". Partial callbacks only ever receive
+interim snapshots and never influence the resolved value.
 
 ## TypeScript Integration
 

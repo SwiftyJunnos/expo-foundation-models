@@ -1,16 +1,20 @@
 import { Platform } from 'react-native';
 import { FoundationModels, FoundationModelsError } from '../index';
-import type { JSONSchema, GenerationOptions } from '../ExpoFoundationModels.types';
+import type { JSONSchema, GenerationOptions, PartialSchemaEvent } from '../ExpoFoundationModels.types';
 import ExpoFoundationModelsModule from '../ExpoFoundationModelsModule';
 
 // Get the mocked module
 const mockModule = ExpoFoundationModelsModule as jest.Mocked<typeof ExpoFoundationModelsModule>;
 
+// The react-native module is mocked in jest.setup.js; typed handle for mutating OS.
+const platformMock = Platform as unknown as { OS: string };
+
 describe('FoundationModels - Structured Output', () => {
   beforeEach(() => {
     jest.clearAllMocks();
-    (Platform as any).OS = 'ios';
+    platformMock.OS = 'ios';
   });
+
 
   describe('respondWithSchema', () => {
     const personSchema: JSONSchema = {
@@ -165,6 +169,175 @@ describe('FoundationModels - Structured Output', () => {
       expect(result.status).toBe('approved');
     });
 
+    it('should pass numeric enum schemas through to native unchanged', async () => {
+      // Native schema conversion decides whether the constraint can be expressed;
+      // the JS facade must never rewrite or drop the enum so the native fallback
+      // (prompt path) still sees the original constraint.
+      const numericEnumSchema: JSONSchema = {
+        type: 'object',
+        properties: {
+          rating: { type: 'integer', enum: [1, 2, 3, 4, 5] },
+        },
+        required: ['rating'],
+      };
+      mockModule.respondWithSchema.mockResolvedValue({ rating: 4 });
+
+      const result = await FoundationModels.respondWithSchema(
+        'session-123',
+        'Rate this from 1 to 5',
+        numericEnumSchema
+      );
+
+      expect(mockModule.respondWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Rate this from 1 to 5',
+        numericEnumSchema,
+        null
+      );
+      expect(result).toEqual({ rating: 4 });
+    });
+
+    it('should forward generated scalar roots unchanged', async () => {
+      const scalarSchema: JSONSchema = { type: 'integer' };
+      mockModule.respondWithSchema.mockResolvedValue(42);
+
+      const result = await FoundationModels.respondWithSchema<number>(
+        'session-123',
+        'Pick a number',
+        scalarSchema
+      );
+
+      expect(result).toBe(42);
+    });
+
+    it('should forward generated non-object array roots unchanged', async () => {
+      const arrayRootSchema: JSONSchema = { type: 'array', items: { type: 'string' } };
+      mockModule.respondWithSchema.mockResolvedValue(['apple', 'banana']);
+
+      const result = await FoundationModels.respondWithSchema<string[]>(
+        'session-123',
+        'Generate a list of fruits',
+        arrayRootSchema
+      );
+
+      expect(mockModule.respondWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Generate a list of fruits',
+        arrayRootSchema,
+        null
+      );
+      expect(result).toEqual(['apple', 'banana']);
+    });
+
+    it('should forward string schemas with length constraints unchanged', async () => {
+      // Native conversion decides fallback selection; scalar constraints such as
+      // minLength/maxLength must reach the bridge untouched so the prompt
+      // fallback preserves them instead of the facade silently dropping them.
+      const constrainedSchema: JSONSchema = {
+        type: 'object',
+        properties: {
+          name: { type: 'string', minLength: 1, maxLength: 100 },
+        },
+        required: ['name'],
+      };
+      mockModule.respondWithSchema.mockResolvedValue({ name: 'Alex' });
+
+      const result = await FoundationModels.respondWithSchema(
+        'session-123',
+        'Generate a name',
+        constrainedSchema
+      );
+
+      expect(mockModule.respondWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Generate a name',
+        constrainedSchema,
+        null
+      );
+      expect(result).toEqual({ name: 'Alex' });
+    });
+
+    it('should forward numeric schemas with range constraints unchanged', async () => {
+      const rangedSchema: JSONSchema = {
+        type: 'object',
+        properties: {
+          age: { type: 'integer', minimum: 0, maximum: 150 },
+          score: { type: 'number', minimum: -1.5, maximum: 1.5 },
+        },
+        required: ['age'],
+      };
+      mockModule.respondWithSchema.mockResolvedValue({ age: 30, score: 0.75 });
+
+      const result = await FoundationModels.respondWithSchema(
+        'session-123',
+        'Generate a profile',
+        rangedSchema
+      );
+
+      expect(mockModule.respondWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Generate a profile',
+        rangedSchema,
+        null
+      );
+      expect(result).toEqual({ age: 30, score: 0.75 });
+    });
+
+    it('should forward generation options containing contextOptions unchanged', async () => {
+      mockModule.respondWithSchema.mockResolvedValue({ name: 'Jane', age: 25 });
+      const options: GenerationOptions = {
+        temperature: 0.3,
+        contextOptions: { reasoningLevel: 'deep', includeSchemaInPrompt: false },
+      };
+
+      await FoundationModels.respondWithSchema(
+        'session-123',
+        'Generate a person',
+        personSchema,
+        options
+      );
+
+      expect(mockModule.respondWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Generate a person',
+        personSchema,
+        options
+      );
+    });
+
+    it('should surface the normalized feature error when schema fallback cannot honor includeSchemaInPrompt: false', async () => {
+      // Native wire shape: FMErrorType 'featureUnavailable' + normalized code
+      // 'featureUnavailable', thrown before any generation when the schema needs
+      // the prompt fallback (e.g. scalar constraints) but the caller asked to
+      // omit the schema from the prompt.
+      const constrainedSchema: JSONSchema = {
+        type: 'object',
+        properties: { name: { type: 'string', minLength: 1 } },
+        required: ['name'],
+      };
+      mockModule.respondWithSchema.mockRejectedValue(
+        Object.assign(
+          new Error(
+            'Cannot honor contextOptions.includeSchemaInPrompt = false: the JSON Schema could not be converted to a native generation schema, so the prompt-based fallback must include the schema to preserve structured output'
+          ),
+          { type: 'featureUnavailable', code: 'featureUnavailable' }
+        )
+      );
+
+      const error = await FoundationModels.respondWithSchema(
+        'session-123',
+        'Generate a name',
+        constrainedSchema,
+        { contextOptions: { includeSchemaInPrompt: false } }
+      ).catch((e) => e);
+
+      expect(error).toBeInstanceOf(FoundationModelsError);
+      expect(error.type).toBe('notAvailable');
+      expect(error.errorCode).toBe('featureUnavailable');
+      expect(error.cause).toBe('unsupportedOSVersion');
+    });
+
+
     it('should throw FoundationModelsError when session ID is empty', async () => {
       await expect(
         FoundationModels.respondWithSchema('', 'prompt', personSchema)
@@ -274,6 +447,29 @@ describe('FoundationModels - Structured Output', () => {
       );
     });
 
+    it('should forward generation options containing contextOptions unchanged', async () => {
+      const choices = ['positive', 'negative', 'neutral'];
+      mockModule.respondWithChoices.mockResolvedValue('positive');
+      const options: GenerationOptions = {
+        temperature: 0.2,
+        contextOptions: { reasoningLevel: 'deep', includeSchemaInPrompt: false },
+      };
+
+      await FoundationModels.respondWithChoices(
+        'session-123',
+        'What is the sentiment of: "I love this product!"',
+        choices,
+        options
+      );
+
+      expect(mockModule.respondWithChoices).toHaveBeenCalledWith(
+        'session-123',
+        'What is the sentiment of: "I love this product!"',
+        choices,
+        options
+      );
+    });
+
     it('should handle numeric choices', async () => {
       const choices = ['1', '2', '3', '4', '5'];
       mockModule.respondWithChoices.mockResolvedValue('4');
@@ -352,6 +548,121 @@ describe('FoundationModels - Structured Output', () => {
       required: ['title', 'content'],
     };
 
+    it('should forward string schemas with length constraints unchanged while streaming', async () => {
+      const constrainedSchema: JSONSchema = {
+        type: 'object',
+        properties: {
+          title: { type: 'string', minLength: 1, maxLength: 80 },
+        },
+        required: ['title'],
+      };
+      mockModule.streamWithSchema.mockResolvedValue({ title: 'Hello' });
+
+      const result = await FoundationModels.streamWithSchema(
+        'session-123',
+        'Generate a post',
+        constrainedSchema,
+        jest.fn()
+      );
+
+      expect(mockModule.streamWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Generate a post',
+        constrainedSchema,
+        null
+      );
+      expect(result).toEqual({ title: 'Hello' });
+    });
+
+    it('should forward generation options containing contextOptions unchanged', async () => {
+      mockModule.streamWithSchema.mockResolvedValue({ title: 'Hello', content: 'World' });
+      const options: GenerationOptions = {
+        temperature: 0.4,
+        contextOptions: { reasoningLevel: 'moderate', includeSchemaInPrompt: false },
+      };
+
+      await FoundationModels.streamWithSchema(
+        'session-123',
+        'Generate a post',
+        simpleSchema,
+        jest.fn(),
+        options
+      );
+
+      expect(mockModule.streamWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Generate a post',
+        simpleSchema,
+        options
+      );
+    });
+
+    it('should surface the normalized feature error when schema fallback cannot honor includeSchemaInPrompt: false', async () => {
+      const constrainedSchema: JSONSchema = {
+        type: 'object',
+        properties: { title: { type: 'string', maxLength: 80 } },
+        required: ['title'],
+      };
+      mockModule.streamWithSchema.mockRejectedValue(
+        Object.assign(
+          new Error(
+            'Cannot honor contextOptions.includeSchemaInPrompt = false: the JSON Schema could not be converted to a native generation schema, so the prompt-based fallback must include the schema to preserve structured output'
+          ),
+          { type: 'featureUnavailable', code: 'featureUnavailable' }
+        )
+      );
+
+      const error = await FoundationModels.streamWithSchema(
+        'session-123',
+        'Generate a post',
+        constrainedSchema,
+        jest.fn(),
+        { contextOptions: { includeSchemaInPrompt: false } }
+      ).catch((e) => e);
+
+      expect(error).toBeInstanceOf(FoundationModelsError);
+      expect(error.type).toBe('notAvailable');
+      expect(error.errorCode).toBe('featureUnavailable');
+    });
+
+    it('should resolve a valid empty object as the final value even when no partial was emitted', async () => {
+      // An empty object is a legitimate generated value (e.g. all properties
+      // optional); it must be returned as the final result rather than being
+      // treated as "no value" — final responses are distinct from partial
+      // snapshots.
+      mockModule.streamWithSchema.mockResolvedValue({});
+      const onPartial = jest.fn();
+
+      const pending = FoundationModels.streamWithSchema(
+        'session-123',
+        'Generate an optional record',
+        { type: 'object', properties: { note: { type: 'string' } } },
+        onPartial
+      );
+
+      await expect(pending).resolves.toEqual({});
+    });
+
+    it('should keep the resolved final value authoritative over interim snapshots', async () => {
+      mockModule.streamWithSchema.mockResolvedValue({});
+      const onPartial = jest.fn();
+
+      const pending = FoundationModels.streamWithSchema(
+        'session-123',
+        'Generate an optional record',
+        { type: 'object', properties: { note: { type: 'string' } } },
+        onPartial
+      );
+      // Interim snapshot arrives before the native promise resolves; the final
+      // resolution must still be whatever the bridge returns, not the snapshot.
+      const handler = mockModule.addListener.mock.calls.find(
+        (call) => call[0] === 'onPartialSchema'
+      )?.[1] as unknown as (event: PartialSchemaEvent) => void;
+      handler({ sessionId: 'session-123', partial: {} });
+
+      await expect(pending).resolves.toEqual({});
+    });
+
     it('should stream structured output and call onPartial for partial results', async () => {
       const mockFinalResponse = { title: 'Hello', content: 'World' };
       mockModule.streamWithSchema.mockResolvedValue(mockFinalResponse);
@@ -399,6 +710,54 @@ describe('FoundationModels - Structured Output', () => {
       ).rejects.toThrow();
 
       expect(mockRemove).toHaveBeenCalled();
+    });
+
+    it('should pass numeric enum schemas through to native unchanged while streaming', async () => {
+      const ratingSchema: JSONSchema = {
+        type: 'object',
+        properties: {
+          rating: { type: 'integer', enum: [1, 2, 3, 4, 5] },
+        },
+        required: ['rating'],
+      };
+      mockModule.streamWithSchema.mockResolvedValue({ rating: 3 });
+
+      const result = await FoundationModels.streamWithSchema(
+        'session-123',
+        'Rate this from 1 to 5',
+        ratingSchema,
+        jest.fn()
+      );
+
+      expect(mockModule.streamWithSchema).toHaveBeenCalledWith(
+        'session-123',
+        'Rate this from 1 to 5',
+        ratingSchema,
+        null
+      );
+      expect(result).toEqual({ rating: 3 });
+    });
+
+
+    it('should deliver non-object partials and final results unchanged', async () => {
+      const arrayRootSchema: JSONSchema = { type: 'array', items: { type: 'string' } };
+      mockModule.streamWithSchema.mockResolvedValue(['a', 'b']);
+      const onPartial = jest.fn();
+
+      const pending = FoundationModels.streamWithSchema<string[]>(
+        'session-123',
+        'Generate a list',
+        arrayRootSchema,
+        onPartial
+      );
+      // Emit a partial through the registered onPartialSchema listener.
+      const handler = mockModule.addListener.mock.calls.find(
+        (call) => call[0] === 'onPartialSchema'
+      )?.[1] as unknown as (event: PartialSchemaEvent) => void;
+      handler({ sessionId: 'session-123', partial: ['a'] });
+
+      await expect(pending).resolves.toEqual(['a', 'b']);
+      expect(onPartial).toHaveBeenCalledWith(['a']);
     });
 
     it('should throw FoundationModelsError when session ID is empty', async () => {

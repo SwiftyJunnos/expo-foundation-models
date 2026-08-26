@@ -55,3 +55,10 @@ yarn-error.log
 
 # Expo
 .expo/*
+
+# Jest
+.jest-cache/
+
+# Expo prebuild (CNG)
+example/ios/build
+example/.expo

@@ -159,6 +159,11 @@ const sessionId = await FoundationModels.createSession({
 const response = await FoundationModels.respond(sessionId, 'Hello!');
 ```
 
+> **iOS 27+ note:** Apple obsoleted `SystemLanguageModel(adapter:)` in the iOS 27 SDK
+> with no replacement. On iOS 27+ a session created with `adapterId` falls back to the
+> default system model; on iOS ≤26 adapter sessions behave as before. See
+> [KNOWN_ISSUES.md](../KNOWN_ISSUES.md) Issue #4.
+
 ### Combine with Other Options
 
 ```typescript

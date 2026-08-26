@@ -48,8 +48,31 @@ class ExpoFoundationModelsModule : Module() {
             mapOf(
                 "available" to false,
                 "status" to "unavailable",
-                "reason" to "platformNotSupported"
+                "reason" to "platformNotSupported",
+                "osVersion" to android.os.Build.VERSION.RELEASE,
+                "features" to mapOf(
+                    "privateCloudCompute" to false,
+                    "imageAttachments" to false,
+                    "contextOptions" to false,
+                    "toolCallingMode" to false,
+                    "tokenCounting" to false,
+                    "modelVariant" to false
+                )
             )
+        }
+
+        // Token / Context / Variant Info Functions (iOS only)
+
+        AsyncFunction("getTokenCount") { text: String, promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("getContextSize") { promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
+        }
+
+        AsyncFunction("getModelVariant") { promise: Promise ->
+            promise.reject(PlatformNotSupportedException())
         }
 
         AsyncFunction("createSession") { instructions: String?, promise: Promise ->

@@ -5,6 +5,95 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+#### iOS 27 Support
+- `FoundationModels.getFeatures()` - Runtime feature detection returning
+  `{ osVersion, features: { privateCloudCompute, imageAttachments, contextOptions, toolCallingMode, tokenCounting, modelVariant } }`
+  (`getAvailability()` gains the same additive fields)
+- Private Cloud Compute sessions via `createSession` option
+  `model: { type: 'privateCloudCompute' }` (iOS 27.0+; rejects with `featureUnavailable` on iOS 26)
+- Multimodal prompts: `respond`/`streamResponse` accept object prompts
+  `{ text, images?: Array<{ uri } | { base64 }> }` (iOS 27.0+; string prompts unchanged)
+- Context options in generation options:
+  `contextOptions: { reasoningLevel?: 'light' | 'moderate' | 'deep', includeSchemaInPrompt?: boolean }`
+  (iOS 27.0+; passing it on iOS 26 or earlier rejects with `featureUnavailable`)
+- Tool calling mode in generation options:
+  `toolCallingMode?: 'allowed' | 'required' | 'disallowed'`
+  (iOS 27.0+; passing it on iOS 26 or earlier rejects with `featureUnavailable`)
+- `FoundationModels.getTokenCount(text)` and `FoundationModels.getContextSize()` (iOS 26.4+;
+  `getContextSize()` returns `null` below 26.4)
+- `FoundationModels.getModelVariant()` (reserved API; returns `null` on all versions —
+  `SystemLanguageModel.variant` is documented for iOS 27 but absent from the shipped SDK)
+- Native structured output on iOS 27+: JSON Schema → `DynamicGenerationSchema` → `GenerationSchema`
+  (prompt-based fallback retained on iOS 26)
+- Tool calling on every supported OS version via the JavaScript-driven prompt flow:
+  the model returns a parsed JSON tool call, the app executes the tool, and
+  `submitToolResult` continues generation with the result
+- Native tool-call payload validation shared by `respondWithTools` and
+  `streamWithTools`: `name` must be a non-empty string matching a tool registered
+  for the session and `arguments` must be a JSON object; a parsed but invalid
+  tool call rejects with a normalized `generationFailed` error and is never
+  delivered to JavaScript. `'disallowed'` never parses or emits tool calls
+- Example app "iOS 27" tab demonstrating all new capabilities behind `getFeatures()` guards
+
+### Changed
+
+- Normalized error codes: every generation/session/model failure now maps to a single
+  stable `FoundationModelsErrorCode` union (`contextSizeExceeded`, `rateLimited`, `refusal`,
+  `guardrailViolation`, …) with identical behavior on iOS 26 and iOS 27 devices.
+  Replaces the obsoleted `LanguageModelSession.GenerationError` mapping
+  (`exceededContextWindowSize` → `contextSizeExceeded`, `unsupportedGuide` → `unsupportedGenerationGuide`)
+
+- Native tool calls no longer fabricate results: `DynamicTool` surfaces the prompt-based
+  tool-call request to JavaScript and generation continues only through `submitToolResult`
+
+- Feature flags from `getFeatures()` now reflect **actual runtime usability**, not
+  just OS presence: on iOS 27+ `privateCloudCompute` is `true` only when Apple's
+  `PrivateCloudComputeLanguageModel` is available for the user's Apple Intelligence
+  account/model, and `modelVariant` stays `false` on every OS version
+- Prompt-driven `toolCallingMode` semantics applied uniformly to `respondWithTools`
+  and `streamWithTools`: `'required'` demands exactly one JSON tool call and throws
+  a normalized generation error when the model answers with plain text or unparsable
+  output; `'disallowed'` omits tool definitions and tool-call instructions entirely;
+  `'allowed'` (default) keeps the optional flow. No executable `DynamicTool` is
+  registered natively — JavaScript and `submitToolResult` stay authoritative
+- PCC sessions validate their configuration instead of silently ignoring
+  unsupported options: `createSession({ model: { type: 'privateCloudCompute' }, … })`
+  rejects with the `featureUnavailable` error code when given
+  `useCase: 'contentTagging'`, `guardrails: 'permissiveContentTransformations'`,
+  or an `adapterId`. Omitted/default guardrails, omitted/`'general'` use case,
+  instructions, and prompt-based tools remain supported on PCC sessions
+- Non-string JSON Schema enums (numeric, boolean, or mixed values) are forwarded to
+  native unchanged; when iOS 27 schema conversion cannot express them safely they
+  throw there so the existing prompt-based fallback preserves the enum constraint
+  instead of silently dropping it
+- Scalar JSON Schema constraints (string `minLength`/`maxLength`, numeric
+  `minimum`/`maximum`) are forwarded to native unchanged; like non-string enums,
+  schemas containing them throw during iOS 27 native schema conversion so the
+  existing prompt-based fallback preserves the constraints instead of silently
+  dropping them
+  The prompt fallback embeds the schema text by design, so
+  `contextOptions.includeSchemaInPrompt: false` cannot suppress it for a
+  falling-back schema — that combination rejects with a normalized
+  feature/generation error. `contextOptions.reasoningLevel` still reaches the
+  context-aware response/streaming overloads on iOS 27 on both paths.
+- `respondWithSchema`, `respondWithChoices`, and `streamWithSchema` forward
+  generation options containing `contextOptions` unchanged through the context-aware
+  overloads on iOS 27 (iOS 26 still rejects with `featureUnavailable`)
+  so `reasoningLevel` applies on both the native and prompt-fallback paths
+- `streamWithSchema` resolves with the bridge's final generated value, which is
+  authoritative over interim partial snapshots; a valid empty object `{}` (all
+  properties optional) is returned as-is as the final result
+
+### Fixed
+
+- Compile compatibility with the iOS 27 SDK where `LanguageModelSession.GenerationError`,
+  `Transcript.StructuredSegment.source`, and `ToolCallError` were removed/renamed —
+  all references replaced with availability-guarded code paths
+
 ## [1.0.0] - 2025-06-07
 
 ### Added

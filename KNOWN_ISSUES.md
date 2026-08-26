@@ -1,16 +1,20 @@
 # Known Issues and Workarounds
 
-This document tracks known issues with the iOS 26 beta Foundation Models API and the workarounds implemented in this library.
+This document tracks known issues with Apple's Foundation Models API and the
+workarounds implemented in this library. Items marked **Resolved on iOS 27** still use
+their iOS 26 fallback on older devices — the library selects the path automatically at
+runtime and both paths share the same TypeScript wire format.
 
 ## Issue #1: DynamicGenerationSchema Not Supported at Runtime
 
-**Status:** Workaround implemented  
+**Status:** Resolved on iOS 27.0+ · fallback retained for iOS 26  
 **Affected APIs:** `respondWithSchema()`, `respondWithChoices()`, `streamWithSchema()`  
-**iOS Version:** iOS 26 beta (as of December 2024)
+**iOS Version:** iOS 26.x (fallback path)
 
 ### Problem
 
-Apple's `DynamicGenerationSchema` API does not support runtime schema construction in the current iOS 26 beta. The intended usage pattern was:
+On iOS 26, Apple's `DynamicGenerationSchema` API does not support runtime schema
+construction. The intended usage pattern was:
 
 ```swift
 // This doesn't work in current beta
@@ -23,7 +27,7 @@ let schema = DynamicGenerationSchema(
 )
 ```
 
-### Workaround
+### Fallback (iOS 26)
 
 We use a **prompt-based approach**:
 
@@ -46,35 +50,71 @@ IMPORTANT:
 """
 ```
 
-### Limitations
+### What Changed on iOS 27
+
+Under `#available(iOS 27.0, *)`, schemas are converted **natively**:
+JSON Schema → `DynamicGenerationSchema` → `GenerationSchema`. Output is enforced by the
+framework instead of prompt instructions; the same wire format is preserved.
+
+**Non-string enums:** `GenerationSchema` cannot express enum constraints whose values
+are not strings (numeric, boolean, or mixed enums). Schemas containing such enums
+throw during native conversion and automatically take the iOS 26-style prompt-based
+fallback instead — the enum constraint is preserved via prompt instructions rather
+than silently dropped. The JS facade forwards the schema unchanged; the choice is
+made in native code.
+
+**Scalar constraints:** like non-string enums, string `minLength`/`maxLength` and
+numeric `minimum`/`maximum` bounds cannot be expressed safely by the iOS 27 native
+schema conversion. Schemas containing such constraints throw during native
+conversion and take the prompt-based fallback instead — the bounds are preserved
+via prompt instructions rather than silently dropped. The JS facade forwards the
+schema unchanged; the choice is made in native code.
+
+**Fallback schema vs. `includeSchemaInPrompt`:** the prompt-based fallback must
+embed the JSON schema text to preserve structured output. Setting
+`contextOptions.includeSchemaInPrompt: false` cannot suppress it for a schema that
+falls back — that combination rejects with an explicit normalized feature/generation
+error instead of silently contradicting the setting. `contextOptions.reasoningLevel`
+still reaches the context-aware response/streaming overload on iOS 27 on both paths.
+
+**Streaming empty results:** `streamWithSchema` resolves with the final generated
+value from the bridge, which is authoritative over any interim partial snapshot. A
+valid empty object `{}` (all properties optional) is returned as-is as the final
+result rather than being treated as "no value".
+
+### Root Schemas and Image Attachments
+
+- **Non-object roots:** Schemas whose root is an array, string, number, boolean, or null
+  are supported on both paths — the generated value is returned directly (native
+  conversion via `anyFromGeneratedContent` on iOS 27+, JSON parsing of the response text
+  on the iOS 26 fallback). There is no post-generation failure for non-object roots.
+- **Image attachments:** When a structured-output prompt carries images, they are always
+  forwarded to the model through a native `Prompt` with `Attachment`s — including on the
+  fallback path. On iOS 26 or earlier, image attachments reject explicitly with
+  `featureUnavailable`; images are never silently dropped.
+
+### Remaining Limitations (iOS 26 fallback only)
 
 - **Reliability:** The model might not always produce valid JSON
 - **No native enforcement:** Invalid output is possible despite instructions
 - **Token usage:** Slightly higher due to schema in prompt
 - **Streaming:** Partial JSON parsing may fail for incomplete responses
 
-### Code References
-
-- Swift implementation: `ios/ExpoFoundationModelsModule.swift:637-690`
-- JSON parsing helpers: `ios/ExpoFoundationModelsModule.swift:759-870`
-
-### Future
-
-This workaround will be replaced with native `DynamicGenerationSchema` support when Apple stabilizes the API. Monitor Apple's Foundation Models documentation for updates.
-
 ---
 
 ## Issue #2: Tool Calling API Requires Compile-Time Types
 
-**Status:** Workaround implemented  
+**Status:** Workaround on all supported OS versions · unified JavaScript-driven flow  
 **Affected APIs:** `createSessionWithTools()`, `respondWithTools()`, `submitToolResult()`  
-**iOS Version:** iOS 26 beta (as of December 2024)
+**iOS Version:** iOS 26.x and iOS 27.0+
 
 ### Problem
 
-The native Foundation Models Tool API requires compile-time `@Generable` argument types. These Swift types must be defined at compile time, making it impossible to create dynamic tool definitions from JavaScript.
+On iOS 26, the native Foundation Models Tool API requires compile-time `@Generable`
+argument types. These Swift types must be defined at compile time, making it impossible
+to create dynamic tool definitions from JavaScript.
 
-### Workaround
+### Approach (All OS Versions)
 
 We use a **prompt-based approach**:
 
@@ -82,7 +122,8 @@ We use a **prompt-based approach**:
 2. When responding, tool definitions are included in the prompt
 3. The model is instructed to respond with a JSON tool call if needed
 4. The response is parsed to detect tool calls
-5. Tool results are submitted by continuing the conversation with the result
+5. The app executes the tool handler in JavaScript and submits the result with
+   `submitToolResult`, which continues generation with that result
 
 ```swift
 let structuredPrompt = """
@@ -101,38 +142,88 @@ If you need to use a tool, respond with ONLY:
 """
 ```
 
-### Limitations
+### Behavior on iOS 27
+
+The tool-calling flow is identical on iOS 27+: the model still returns a JSON tool call,
+JavaScript executes it, and `submitToolResult` continues the conversation. Native tool
+code never fabricates or short-circuits results. The only iOS 27-specific addition is
+the `toolCallingMode` (`'allowed' | 'required' | 'disallowed'`) generation option,
+which rejects with `featureUnavailable` on iOS 26 or earlier.
+
+The `toolCallingMode` option shapes the prompt, never registers an executable native
+tool: `'required'` instructs the model to answer with exactly one JSON tool call and
+rejects with a normalized generation error if it produces plain text or unparsable
+output instead; `'disallowed'` omits tool definitions and tool-call instructions so
+the model can only return plain text; `'allowed'` (default) keeps the optional flow.
+The same semantics apply to `respondWithTools` and `streamWithTools`, and
+`submitToolResult` remains the only way to continue generation after a tool call.
+
+### Remaining Limitations (All OS Versions)
 
 - Model may not always format tool calls correctly
 - No native tool call validation
 - Slightly higher token usage due to tool definitions in prompt
 
-### Code References
-
-- Session creation: `ios/ExpoFoundationModelsModule.swift:951-991`
-- Prompt building: `ios/ExpoFoundationModelsModule.swift` (search for `buildToolsPrompt`)
-- Response parsing: `ios/ExpoFoundationModelsModule.swift` (search for `parseToolCallResponse`)
-
 ---
 
 ## Issue #3: Transcript API Compatibility
 
-**Status:** Workaround implemented  
+**Status:** Partially resolved · workaround retained  
 **Affected APIs:** `getTranscript()`, `createSessionWithTranscript()`  
-**iOS Version:** iOS 26 beta (as of December 2024)
+**iOS Version:** all versions
 
 ### Problem
 
-The `Transcript` type and session initialization with existing transcripts have changed.
+The `Transcript` type and session initialization with existing transcripts have changed
+across OS releases. On iOS 27, `Transcript.StructuredSegment.source` was renamed to
+`.schemaName` (and `init(id:source:content:)` → `init(id:schemaName:content:)`), which is
+a compile-time break handled inside availability-guarded native code.
 
 ### Workaround
 
 - Transcript extraction uses reflection to access internal properties
 - `createSessionWithTranscript` is stubbed (creates new session without history)
+- Structured-segment decoding handles both field names depending on OS version
 
-### Code References
+---
 
-- Swift implementation: `ios/ExpoFoundationModelsModule.swift` (search for `Transcript`)
+## Out of Scope
+
+The following iOS 27 APIs are intentionally **not supported** by this library:
+
+| Feature | Reason |
+|---------|--------|
+| Custom `LanguageModel` / `LanguageModelExecutor` implementations | Swift-only protocols; meaningless across the React Native bridge |
+| `DynamicProfile` / `DynamicInstructions` sessions | Swift-only dynamic instruction/profile construction; no bridge representation |
+| `transcriptErrorHandlingPolicy` | Policy object is Swift-native; errors are already normalized to stable string codes at the bridge boundary |
+| Vision OCRTool / BarcodeReaderTool wrappers | Vision-framework tools outside the Foundation Models surface this module targets |
+
+## Issue #4: iOS 27 SDK Gaps vs. Documented API
+
+**Status:** Known limitation of the shipped iOS 27.0 SDK
+
+- **Model variant:** Apple's documentation lists `SystemLanguageModel.variant` for
+  iOS 27, but the final SDK does not include the symbol (verified against the
+  swiftinterface). `getModelVariant()` is kept behind the iOS 27 guard and returns
+  `null` on every OS version; the `modelVariant` feature flag reports `false`.
+- **Adapters on iOS 27+:** `SystemLanguageModel(adapter:)` was obsoleted in the iOS 27
+  SDK with no replacement. On iOS 27+ a session created with `adapterId` silently falls
+  back to the default system model; on iOS ≤26 adapter sessions behave as before.
+  Within Private Cloud Compute sessions (`model.type: 'privateCloudCompute'`) an
+  `adapterId` is rejected outright with the `featureUnavailable` error code instead of
+  being silently ignored. Adapter loading/compilation APIs remain functional.
+
+---
+
+## Error Code Normalization
+
+`LanguageModelSession.GenerationError` was obsoleted in the iOS 27 SDK (replaced by
+`LanguageModelError`, `SystemLanguageModel.Error`, and `LanguageModelSession.Error`).
+The library maps every failure to one stable string code exposed as
+`FoundationModelsErrorCode` (`contextSizeExceeded`, `rateLimited`, `refusal`,
+`guardrailViolation`, …) so behavior is identical on iOS 26 and 27 devices. Old-to-new
+mapping: `exceededContextWindowSize` → `contextSizeExceeded`,
+`unsupportedGuide` → `unsupportedGenerationGuide`.
 
 ---
 
@@ -146,4 +237,5 @@ If you encounter additional issues or have suggestions for workarounds:
 
 ## Updates
 
-This document is updated as the iOS 26 beta evolves. Last updated: December 2024
+This document tracks the evolving Foundation Models API across iOS 26/27 releases.
+Last updated: August 2026

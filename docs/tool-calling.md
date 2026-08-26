@@ -2,20 +2,29 @@
 
 Let the model call functions you define to extend its capabilities.
 
-> **iOS 26 Beta Workaround**
+> **How Tool Calling Works**
 >
-> The native Tool API requires compile-time `@Generable` argument types, which can't be created dynamically from JavaScript. We use a **prompt-based workaround**:
+> Tool calling uses a **JavaScript-driven prompt flow on every supported OS version**
+> (iOS 26.x and iOS 27.0+ alike), because Apple's native Tool API requires compile-time
+> `@Generable` argument types that cannot be created from JavaScript:
+> 1. Tool definitions are included in the prompt sent to the model
+> 2. The model responds with a JSON tool call when it needs a tool
+>    (`respondWithTools` resolves to `{ type: 'toolCall', toolCall }`)
+> 3. Your JavaScript code executes the tool handler
+> 4. `submitToolResult` continues the conversation with the tool result
 >
-> 1. Tool definitions are included in the prompt to the model
-> 2. The model responds with a JSON tool call if needed
-> 3. Tool results are submitted by continuing the conversation
+> Native code never fabricates or short-circuits a tool result — generation continues
+> only through `submitToolResult`.
 >
-> **Limitations:**
-> - Model may not always format tool calls correctly
-> - No native tool call validation
-> - Slightly higher token usage due to tool definitions in prompt
+> **Limitations (all OS versions):** token usage is slightly higher because tool
+> definitions are part of the prompt. Model-emitted tool calls are validated
+> natively before they reach JavaScript (registered tool name, JSON-object
+> arguments — see [Tool Call Payload Validation](#tool-call-payload-validation)),
+> but argument *values* are still model-generated: validate them against your own
+> schemas before executing your tools.
 >
-> See [GitHub Issue #1](https://github.com/mcp-foundation/expo-foundation-models/issues/1) for updates.
+> The flow is identical on iOS 26 and iOS 27; only the `toolCallingMode` option below is
+> iOS 27-only.
 
 ## Overview
 
@@ -261,6 +270,66 @@ if (response.type === 'toolCall') {
   // Handle tool call
 }
 ```
+
+## Tool Calling Mode
+
+Control whether the model may, must, or must not use tools for a request.
+
+- **Availability:** iOS 27.0+. Passing `toolCallingMode` on iOS 26 or earlier rejects
+  with error code `featureUnavailable`. Check `features.features.toolCallingMode`
+  from `getFeatures()` first.
+
+```typescript
+const features = await FoundationModels.getFeatures();
+
+if (!features.features.toolCallingMode) {
+  // iOS 26: fall back to prompt phrasing ("Use the getWeather tool to...")
+}
+
+const response = await FoundationModels.respondWithTools(
+  sessionId,
+  "What's the weather in Tokyo?",
+  { toolCallingMode: 'required' }
+);
+```
+
+### Modes
+
+Because tool calling is a prompt-driven flow on every OS version, `toolCallingMode`
+shapes **what goes into the prompt** — it never registers an executable native tool:
+
+| Mode | Behavior | Use Case |
+|------|----------|----------|
+| `'allowed'` (default) | Tool definitions and tool-call instructions are included, but the model may answer in plain text. `respondWithTools` resolves to `{ type: 'text' }` or `{ type: 'toolCall', toolCall }`. | General assistance |
+| `'required'` | The prompt demands exactly one JSON tool call. If the model answers with plain text or unparsable output instead of a tool call, the request rejects with a normalized generation error — you never receive plain text from a `required` request. | Guaranteed data-backed answers |
+| `'disallowed'` | Tool definitions and tool-call instructions are omitted entirely; the model generates a normal text response and can never emit a tool call. Saves prompt tokens for pure-text requests. | Pure text generation |
+
+The same semantics apply to `respondWithTools` and `streamWithTools`. In all modes
+your JavaScript code stays authoritative: execute tools yourself and continue via
+`submitToolResult`; no executable `DynamicTool` is registered natively.
+
+## Tool Call Payload Validation
+
+`respondWithTools` and `streamWithTools` share the same native validation for
+every model-emitted tool call. A tool call only ever reaches JavaScript if:
+
+- `name` is a non-empty string that matches one of the tools registered for the
+  session (`createSession({ tools })` / `createSessionWithTools`) — unknown
+  names never surface as tool calls.
+- `arguments` is a JSON object (a missing or empty object is valid; arrays,
+  strings, and other JSON shapes are rejected).
+
+Error behavior by `toolCallingMode`:
+
+| Mode | Parsed but invalid tool call | No parsable tool call |
+|------|------------------------------|------------------------|
+| `'allowed'` (default) | Rejects with a normalized `generationFailed` error — the invalid call is never delivered to JavaScript. | Resolves to a plain `{ type: 'text' }` response. |
+| `'required'` | Rejects with a normalized `generationFailed` error. | Rejects with a normalized generation error — you never receive plain text from a `required` request. |
+| `'disallowed'` | Tool calls are never parsed or emitted; the request behaves as plain-text generation. | Same — plain-text generation only. |
+
+This validation guarantees shape and registration, not meaningful values: keep
+validating arguments against your own tool schemas before executing them
+(see [Best Practices](#best-practices)).
 
 ## Complete Example
 

@@ -12,12 +12,16 @@ import type {
   ExtendedSessionOptions,
   FeedbackOptions,
   FeedbackResult,
+  FeaturesResult,
   GenerationOptions,
   InputValidationResult,
   JSONSchema,
   LoadAdapterOptions,
+  LocaleInfo,
   MLDictionary,
+  ModelVariantInfo,
   PrewarmOptions,
+  PromptWithAttachments,
   SessionDiagnostics,
   SessionOptions,
   ToolResponse,
@@ -45,6 +49,9 @@ declare class ExpoFoundationModelsModuleType extends NativeModule<ExpoFoundation
   getAvailabilityDiagnostics(): AvailabilityDiagnostics;
   getSessionDiagnostics(sessionId: string): Promise<SessionDiagnostics>;
 
+  getLocaleInfo(): LocaleInfo;
+  getFeatures(): Promise<FeaturesResult>;
+
   // Foundation Models - Session Management
   createSession(instructions: string | null): Promise<string>;
   createSessionWithConfig(options: ExtendedSessionOptions): Promise<string>;
@@ -54,44 +61,53 @@ declare class ExpoFoundationModelsModuleType extends NativeModule<ExpoFoundation
   getTranscript(sessionId: string): Promise<TranscriptEntry[]>;
   prewarm(sessionId: string, options: PrewarmOptions | null): Promise<void>;
 
+  // Foundation Models - iOS 27 Introspection
+  getTokenCount(text: string): Promise<number>;
+  getContextSize(): Promise<number | null>;
+  getModelVariant(): Promise<ModelVariantInfo | null>;
+
   // Foundation Models - Text Generation
-  respond(sessionId: string, prompt: string, options: GenerationOptions | null): Promise<string>;
+  respond(
+    sessionId: string,
+    prompt: string | PromptWithAttachments,
+    options: GenerationOptions | null
+  ): Promise<string>;
   streamResponse(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     options: GenerationOptions | null
   ): Promise<string>;
 
   // Foundation Models - Structured Output
   respondWithSchema(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     schema: JSONSchema,
     options: GenerationOptions | null
-  ): Promise<Record<string, unknown>>;
+  ): Promise<unknown>;
   respondWithChoices(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     choices: string[],
     options: GenerationOptions | null
   ): Promise<string>;
   streamWithSchema(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     schema: JSONSchema,
     options: GenerationOptions | null
-  ): Promise<Record<string, unknown>>;
+  ): Promise<unknown>;
 
   // Foundation Models - Tool Calling
   respondWithTools(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     options: GenerationOptions | null
   ): Promise<ToolResponse>;
   submitToolResult(sessionId: string, toolResult: ToolResult): Promise<ToolResponse>;
   streamWithTools(
     sessionId: string,
-    prompt: string,
+    prompt: string | PromptWithAttachments,
     options: GenerationOptions | null
   ): Promise<ToolResponse>;
 

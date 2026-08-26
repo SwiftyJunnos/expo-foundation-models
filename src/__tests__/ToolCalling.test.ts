@@ -197,6 +197,75 @@ describe('FoundationModels - Tool Calling', () => {
         FoundationModelsError
       );
     });
+
+    it('should forward toolCallingMode required unchanged to native', async () => {
+      mockModule.respondWithTools.mockResolvedValue({
+        type: 'toolCall' as const,
+        toolCall: {
+          id: 'call-1',
+          name: 'getWeather',
+          arguments: { city: 'Tokyo' },
+        } as ToolCall,
+      });
+
+      await FoundationModels.respondWithTools('session-123', 'Weather in Tokyo?', {
+        toolCallingMode: 'required',
+      });
+
+      expect(mockModule.respondWithTools).toHaveBeenCalledWith('session-123', 'Weather in Tokyo?', {
+        toolCallingMode: 'required',
+      });
+    });
+
+    it('should forward toolCallingMode disallowed unchanged to native', async () => {
+      mockModule.respondWithTools.mockResolvedValue({ type: 'text' as const, content: 'Sure!' });
+
+      await FoundationModels.respondWithTools('session-123', 'Tell me a joke', {
+        toolCallingMode: 'disallowed',
+      });
+
+      expect(mockModule.respondWithTools).toHaveBeenCalledWith('session-123', 'Tell me a joke', {
+        toolCallingMode: 'disallowed',
+      });
+    });
+
+    it('should pass valid tool call payloads through unchanged', async () => {
+      // Native validates the payload before it crosses the bridge (non-empty
+      // name matching a registered session tool, JSON-object arguments); the
+      // facade's contract is to hand the validated call through untouched.
+      const mockResponse = {
+        type: 'toolCall' as const,
+        toolCall: {
+          id: 'call-42',
+          name: 'searchWeb',
+          arguments: {
+            query: 'expo foundation models',
+            maxResults: 5,
+            filters: { lang: 'en' },
+          },
+        },
+      };
+      mockModule.respondWithTools.mockResolvedValue(mockResponse);
+
+      const result = await FoundationModels.respondWithTools(
+        'session-123',
+        'Search for expo foundation models'
+      );
+
+      expect(mockModule.respondWithTools).toHaveBeenCalledWith(
+        'session-123',
+        'Search for expo foundation models',
+        null
+      );
+      expect(result.type).toBe('toolCall');
+      expect(result.toolCall?.id).toBe('call-42');
+      expect(result.toolCall?.name).toBe('searchWeb');
+      expect(result.toolCall?.arguments).toEqual({
+        query: 'expo foundation models',
+        maxResults: 5,
+        filters: { lang: 'en' },
+      });
+    });
   });
 
   describe('submitToolResult', () => {
@@ -369,6 +438,33 @@ describe('FoundationModels - Tool Calling', () => {
       expect(result).toEqual(mockFinalResponse);
     });
 
+    it('should deliver a valid native tool call event through the facade callback', async () => {
+      const mockFinalResponse = { type: 'text' as const, content: 'Done' };
+      mockModule.streamWithTools.mockResolvedValue(mockFinalResponse);
+
+      const toolCall = { id: 'call-1', name: 'getWeather', arguments: { city: 'Seoul' } };
+      const onToken = jest.fn();
+      const onToolCall = jest.fn();
+
+      const pending = FoundationModels.streamWithTools('session-123', "What's the weather?", {
+        onToken,
+        onToolCall,
+      });
+
+      // The facade registers listeners synchronously before awaiting the native call.
+      const handler = mockModule.addListener.mock.calls.find((call) => call[0] === 'onToolCall')?.[1] as
+        | ((event: { sessionId: string; toolCall: typeof toolCall }) => void)
+        | undefined;
+      expect(handler).toBeDefined();
+
+      handler!({ sessionId: 'session-123', toolCall });
+      const result = await pending;
+
+      expect(onToolCall).toHaveBeenCalledTimes(1);
+      expect(onToolCall).toHaveBeenCalledWith(toolCall);
+      expect(result).toEqual(mockFinalResponse);
+    });
+
     it('should remove listeners after completion', async () => {
       const mockRemove = jest.fn();
       mockModule.addListener.mockReturnValue({ remove: mockRemove });
@@ -389,6 +485,45 @@ describe('FoundationModels - Tool Calling', () => {
       await expect(
         FoundationModels.streamWithTools('', 'Hello', { onToken: jest.fn(), onToolCall: jest.fn() })
       ).rejects.toThrow(FoundationModelsError);
+    });
+
+    it.each(['required', 'disallowed'] as const)(
+      'should forward toolCallingMode %s unchanged to native',
+      async (mode) => {
+        mockModule.streamWithTools.mockResolvedValue({ type: 'text' as const, content: 'Done' });
+        const callbacks = { onToken: jest.fn(), onToolCall: jest.fn() };
+
+        await FoundationModels.streamWithTools('session-123', "What's the weather?", callbacks, {
+          toolCallingMode: mode,
+        });
+
+        expect(mockModule.streamWithTools).toHaveBeenCalledWith(
+          'session-123',
+          "What's the weather?",
+          { toolCallingMode: mode }
+        );
+      }
+    );
+
+    it('should pass a final toolCall response through unchanged', async () => {
+      const finalToolCall = {
+        type: 'toolCall' as const,
+        toolCall: {
+          id: 'call-7',
+          name: 'getWeather',
+          arguments: { city: 'Seoul' },
+        },
+      };
+      mockModule.streamWithTools.mockResolvedValue(finalToolCall);
+
+      const result = await FoundationModels.streamWithTools(
+        'session-123',
+        "What's the weather in Seoul?",
+        { onToken: jest.fn(), onToolCall: jest.fn() }
+      );
+
+      expect(result.type).toBe('toolCall');
+      expect(result.toolCall).toEqual(finalToolCall.toolCall);
     });
   });
 });
