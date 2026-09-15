@@ -1182,7 +1182,7 @@ export default function App() {
       <SafeAreaView style={styles.container}>
         <ScrollView contentContainerStyle={styles.content}>
           <Text style={styles.title}>expo-foundation-models</Text>
-          <Text style={styles.version}>v1.0.0</Text>
+          <Text style={styles.version}>v1.0.2</Text>
 
           <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.tabScroll}>
             <View style={styles.tabContainer}>

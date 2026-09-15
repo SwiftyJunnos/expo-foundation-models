@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "expo-foundation-models-example",
+    "name": "Foundation Models Test",
     "slug": "expo-foundation-models-example",
-    "version": "1.0.0",
+    "version": "1.0.2",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -14,7 +14,10 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "expo.modules.foundationmodels.example"
+      "bundleIdentifier": "expo.modules.foundationmodels.example",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -27,6 +30,23 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "extra": {
+      "eas": {
+        "projectId": "d41f7558-f87e-4d49-baa7-0bbea7684122"
+      }
+    },
+    "owner": "junnos",
+    "plugins": [
+      "./plugins/with-ios-scene-lifecycle",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "16.0"
+          }
+        }
+      ]
+    ]
   }
 }

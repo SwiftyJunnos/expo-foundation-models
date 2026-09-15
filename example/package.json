@@ -6,10 +6,14 @@
     "start": "expo start",
     "android": "expo run:android",
     "ios": "expo run:ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "eas-build-post-install": "bun install --cwd .. --no-save && bun run --cwd .. build",
+    "build:testflight": "bunx eas-cli build --platform ios --profile testflight --local",
+    "submit:testflight": "bunx eas-cli submit --platform ios --profile testflight"
   },
   "dependencies": {
     "expo": "~54.0.25",
+    "expo-build-properties": "~1.0.10",
     "react": "19.1.0",
     "react-native": "0.81.5"
   },

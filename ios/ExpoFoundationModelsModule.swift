@@ -2620,7 +2620,9 @@ final class FoundationModelsManager: @unchecked Sendable {
                 // execution; forwarding native `toolCallingMode` would push the model
                 // toward hidden native calls that bypass JavaScript.
                 var nativeOptions = options.toNativeOptions()
-                nativeOptions.toolCallingMode = nil
+                if #available(iOS 27.0, macOS 27.0, *) {
+                    nativeOptions.toolCallingMode = nil
+                }
 
                 let structuredPrompt = try makeToolProtocolPrompt(
                     sessionId: sessionId,
@@ -2746,7 +2748,9 @@ final class FoundationModelsManager: @unchecked Sendable {
                 // execution; forwarding native `toolCallingMode` would push the model
                 // toward hidden native calls that bypass JavaScript.
                 var nativeOptions = options.toNativeOptions()
-                nativeOptions.toolCallingMode = nil
+                if #available(iOS 27.0, macOS 27.0, *) {
+                    nativeOptions.toolCallingMode = nil
+                }
 
                 let structuredPrompt = try makeToolProtocolPrompt(
                     sessionId: sessionId,
@@ -2778,8 +2782,8 @@ final class FoundationModelsManager: @unchecked Sendable {
 
                 // Shared success path: a validated tool call emits `onToolCall`
                 // exactly once before being returned, regardless of mode.
-                let finishWithToolCall: (String) throws -> [String: Any] = { toolCall in
-                    let toolCallInfo = try validatedToolCallPayload(toolCall, sessionId: sessionId)
+                let finishWithToolCall: ([String: Any]) throws -> [String: Any] = { toolCall in
+                    let toolCallInfo = try self.validatedToolCallPayload(toolCall, sessionId: sessionId)
                     onToolCall(toolCallInfo)
                     return ["type": "toolCall", "toolCall": toolCallInfo]
                 }
