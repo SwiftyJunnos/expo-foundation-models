@@ -38,7 +38,60 @@ npx pod-install
 ### Development
 
 - **Expo SDK 54+**
-- **Xcode with the iOS 26 SDK or newer** (iOS 27 SDK required to build the iOS 27 paths)
+- **Xcode 27 with the iOS 27 SDK** to compile the native module. Runtime availability
+  checks retain iOS 26 support; they do not make the source compile with older SDKs.
+- **UIKit scene lifecycle** in the host app. Apps built with the iOS 27 SDK fail
+  to launch on iOS 27 without it. See Apple's
+  [scene lifecycle migration guide](https://developer.apple.com/documentation/uikit/transitioning-to-the-uikit-scene-based-life-cycle).
+
+## TestFlight device testing
+
+The `example` app exercises this repository's native module directly. Its iOS
+deployment target is 16.0 so Expo autolinking includes the module. Keep
+`expo.autolinking.nativeModulesDir` set to `..`; a `file:..` dependency can create
+recursive package copies when Bun installs the parent project.
+The example's `with-ios-scene-lifecycle` config plugin creates a scene-owned
+window, starts React Native when the scene connects, and forwards lifecycle and
+link events to the existing Expo app delegate. Keep this plugin enabled when
+generating the native project; adding only a scene manifest is not sufficient.
+
+From the repository root:
+
+```bash
+bun install --no-save
+bun run build
+cd example
+bun install --frozen-lockfile
+bunx expo prebuild --platform ios --clean
+bun run build:testflight --output /tmp/foundation-models-test.ipa
+bun run submit:testflight --path /tmp/foundation-models-test.ipa
+```
+
+The build runs locally with the selected Xcode and uses EAS-managed signing
+credentials. The submission goes to App Store Connect, not public App Store
+release. First-time setup requires an Apple Developer account and
+`bunx eas-cli credentials --platform ios`. Enter passwords and verification codes
+only in the terminal. EAS manages build numbers remotely.
+
+After Apple processes the build, complete any export-compliance questions and
+install it through the internal TestFlight group. Record the app build number,
+device model, iOS version, feature flags, and exact error for each check:
+
+| Screen | Device checks |
+| --- | --- |
+| Startup | Cold launch the Release app, background and reopen it, then terminate and relaunch; no Metro server should be required |
+| Basic | Create a session, generate text, stream a response, close the session |
+| Structured | Generate structured data and classify using constrained choices |
+| Tools | Receive a tool call, execute it, submit its result, inspect the follow-up |
+| Session | Read the transcript, prewarm, and resume conversation history |
+| iOS 27 | Detect capabilities; check token counting on iOS 26.4+ and image prompts, reasoning options, and required tool calls on iOS 27 |
+
+PCC success requires Apple's managed
+[Private Cloud Compute entitlement](https://developer.apple.com/private-cloud-compute/).
+Without approval, record PCC as unavailable, not successfully tested.
+Unsupported feature controls and errors should also be checked on older devices.
+A successful build or TestFlight upload does not establish functional correctness
+on a real device.
 
 ## Checking Availability
 
